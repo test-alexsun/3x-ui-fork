@@ -5,14 +5,35 @@ on:
 jobs:
   unit:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: xui_test
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: xui_source
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U xui_test -d xui_source"
+          --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - run: python -m pip install 'ruff>=0.8,<1'
+      - run: sudo apt-get update && sudo apt-get install -y nginx openssl postgresql-client shellcheck
       - run: bash -n bootstrap.sh install.sh
       - run: shellcheck bootstrap.sh install.sh
       - run: ruff check src tests
       - run: PYTHONPATH=src python -m unittest discover -s tests -v
+      - run: PYTHONPATH=src python tests/integration_postgres.py
+        env:
+          XUI_RUN_PG_INTEGRATION: '1'
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGUSER: xui_test
+          PGPASSWORD: testpass
+          PGDATABASE: xui_source
       - run: PYTHONPATH=src python -m xui_fork.cli check

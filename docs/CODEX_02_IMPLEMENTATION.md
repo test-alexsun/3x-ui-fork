@@ -36,3 +36,49 @@
 ## Инструкция установки и восстановления
 
 Установка панели этой версией не поддерживается: `bash install.sh` выводит блокирующую ошибку. Для проверки окружения: `bash bootstrap.sh check`. Для отдельного SQLite backup и восстановления **в новый файл** используйте команды в [README](../README.md); указанный output должен находиться на зашифрованном носителе. Замена live DB и возврат службы выполняются только после будущего лабораторного restore drill и отдельного плана. Следующая разработка следует gates D2–D9 из [плана миграции](MIGRATION_PLAN.md).
+
+## STAGE 2 COMPLETION — продолжение 29 октября 2026
+
+**Вердикт: STAGE 2 INCOMPLETE.** История выше сохранена. Исправление к ней: прежний `dry-run` возвращал `plan: []` и exit 0 без реального плана; теперь он завершается ошибкой. `install`, `update`, `repair`, `rollback`, `uninstall` по-прежнему не реализованы как изменяющие операции. Подмена их успешным no-op не выполнялась.
+
+| Component | Implemented | Unit Tests | Integration Tests | Result |
+|---|---|---|---|---|
+| `check`, `status`, read-only preflight | Частично: локальные проверки и опциональный API inventory | API-контракт, версия | Read-only SSH `hl`, без запуска CLI на нём | PARTIAL |
+| `dry-run` | Нет desired-state planner; явная ошибка | Проверка fail-closed | Нет | NOT IMPLEMENTED |
+| `install` | Pinned fetch/проверка архива и official script; apply заблокирован | Digest, arch, отказ от плохого файла | Нет disposable VM | NOT IMPLEMENTED / ENVIRONMENT BLOCKED |
+| `update`, `repair`, `uninstall` | Изменяющих реализаций нет | Проверка fail-closed | Нет | NOT IMPLEMENTED |
+| API GET/POST adapter | Allowlist, TLS, envelope, OpenAPI digest, uncertain write без retry | URL, envelope, digest, timeout, partial result | Нет панели на disposable VM | PARTIAL |
+| Inbound/clients/subscriptions/routing | Только статические gates; генерации и E2E нет | Версионный gate | Нет | NOT IMPLEMENTED |
+| SQLite backup / restore в новый файл | Да, online backup, WAL, checksum, integrity | Snapshot/restore, tamper, traversal | Локальная временная БД; живой panel не проверен | PARTIAL |
+| PostgreSQL backup / restore в новую пустую БД | Да, `pg_dump` custom, manifest, `pg_restore --single-transaction` | Отказ от nonempty destination | Disposable PG в CI настроен, запуск не подтверждён | PARTIAL |
+| Nginx panel include | Детерминированный TLS reverse proxy, ownership marker, idempotency, restore старого include при ошибке | Render, foreign file, rollback | `nginx -t` в CI настроен, запуск не подтверждён | PARTIAL |
+| SSL | Совпадение ключа/сертификата, exact DNS SAN, срок | Missing-file case | Generated cert test в CI настроен, запуск не подтверждён; ACME нет | PARTIAL |
+| Full checkpoint / rollback | Нет; Nginx include rollback локален | Nginx rollback test | Нет | NOT IMPLEMENTED |
+| CI | Bash syntax, ShellCheck, Ruff, unit, PostgreSQL и Nginx syntax jobs определены | Локально выполнены 15 tests | Workflow не запускался | UNVERIFIED |
+
+### Классификация причин по режимам
+
+| Режим | Класс | Фактическая причина |
+|---|---|---|
+| install | NOT IMPLEMENTED; ENVIRONMENT BLOCKED | `require_release_artifacts()` блокирует apply. Нет подтверждённой безопасной автоматизации official installer и системного E2E. |
+| update | NOT IMPLEMENTED | В CLI общий guard; нет полного checkpoint binary+DB+env и проверенного возврата после schema migration. |
+| repair | NOT IMPLEMENTED | Нет дефектных адаптеров с точным allowlisted diff. |
+| backup | PARTIAL | SQLite/PG database snapshot есть; нет шифрования и согласованного снимка всех ключей, бинарных файлов, сертификатов и service/env. |
+| restore | PARTIAL | SQLite только в новый файл, PG только в пустую выделенную БД; нет переключения live panel. |
+| rollback | NOT IMPLEMENTED | Локальная компенсация Nginx include не заменяет полный rollback установки. |
+| uninstall | NOT IMPLEMENTED | Нет реестра ownership и безопасного удаления только собственных ресурсов. |
+| dry-run | BUG исправлен; NOT IMPLEMENTED | Пустой успешный план заменён явной ошибкой до реализации planner. |
+
+### Изменения, ошибки и проверки
+
+В `api_client.py` добавлены exact OpenAPI digest и явно неопределённый результат POST после timeout, HTTP error или `success:false`: такой POST не повторяется автоматически. Путь `getDb` остаётся недоступным для read-only. В `installer.py` загрузка release archive и скрипта закреплена SHA-256/Git blob SHA-1, проверяются размер и структура tar; загрузка не запускает установку. В `backup_manager.py` появился PG restore в pre-created `xui_restore_*` DB после проверки пустоты. В `nginx_manager.py` добавлены отдельный include и проверяемая компенсация, в `ssl_manager.py` — SAN/ключ/срок. В CLI `dry-run` больше не сообщает ложный успех.
+
+Причина, по которой official installer не вызван напрямую: в [его коде для 3.11.0](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/install.sh) существующее дерево удаляется перед успешной распаковкой, а неинтерактивный `XUI_SSL_MODE=none` выбирает публичный HTTP. Такой вызов без отдельного ingress gate и полного restore не соответствует требованиям сохранности. Это проектное ограничение, не обнаруженный дефект действующего `hl`.
+
+Фактически выполнено локально на Windows: `python -m unittest discover -s tests -v` — **15 тестов, 14 passed, 1 skipped** (нет Nginx/OpenSSL); `python -m compileall -q src tests` — passed; `git diff --check` — passed. Реальные PostgreSQL и Nginx tests определены в CI, но результат workflow отсутствует. Bash syntax, ShellCheck, Ruff, Xray validation, install/update/repair/rollback/idempotency на systemd VM **не выполнены**. Docker, QEMU, VirtualBox, virsh не найдены; WSL сообщает об отсутствии дистрибутива. Поэтому полный интеграционный цикл `Fresh Install → Configuration → Validation → Update → Backup → Restore → Rollback` имеет статус **BLOCKED (нет изолированной Linux VM)**, не PASS.
+
+Повторный `ssh hl` в read-only режиме: Debian 13, x86_64; `x-ui.service`, `nginx.service`, `postgresql.service` — not-found/inactive; `ss` показал только TCP 22 на IPv4/IPv6; `nft list ruleset` пуст; `/usr/local/x-ui`, `/etc/x-ui`, `/etc/nginx`, `/etc/letsencrypt` отсутствуют. Это согласуется с [baseline](HL_BASELINE.md). API, inbound, Xray и SSL на сервере по-прежнему неприменимы. Настройки и службы `hl` не менялись.
+
+Не подтверждены ни один из шестнадцати protocol E2E, включая MASQUE; статическая поддержка в [матрице](COMPATIBILITY_MATRIX.md) не заменяет handshake и импорт подписки. Не выполнены полное покрытие Nginx stream/SNI/REALITY/XHTTP/gRPC, ACME renewal, пользовательский routing, данные PostgreSQL live panel, сохранение UUID/ключей при update и повторный install без diff.
+
+Git: исходный коммит этапа 2 — `cb65406`; изменения продолжения сохраняются отдельным локальным коммитом. До выполнения оставшихся criteria 1–16 из запроса статус остаётся **STAGE 2 INCOMPLETE**. Production deployment и `git push` не выполнялись.

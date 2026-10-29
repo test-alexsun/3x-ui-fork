@@ -1,8 +1,9 @@
 import json
 import unittest
+import urllib.error
 from unittest.mock import patch
 
-from xui_fork.api_client import ApiClient, ApiError, normalize_embedded_json
+from xui_fork.api_client import ApiClient, ApiError, ApiUncertainError, normalize_embedded_json
 from xui_fork.compatibility import profile_supported, version_supported
 
 
@@ -40,3 +41,21 @@ class ContractTests(unittest.TestCase):
         self.assertTrue(profile_supported("MASQUE", "3.11.0"))
         self.assertFalse(profile_supported("MASQUE", "3.12.0"))
         self.assertEqual(normalize_embedded_json('{"clients":[]}'), {"clients": []})
+
+    def test_write_result_is_never_retried_after_timeout(self):
+        client = ApiClient("https://example.test", "secret")
+        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("timeout")) as open_:
+            with self.assertRaises(ApiUncertainError):
+                client.post("inbounds/add", {"remark": "example"})
+            self.assertEqual(open_.call_count, 1)
+        with self.assertRaisesRegex(ApiError, "allowlisted"):
+            client.post("server/updatePanel", {})
+        with patch("urllib.request.urlopen", return_value=Response({"success": False})):
+            with self.assertRaisesRegex(ApiUncertainError, "partly applied"):
+                client.post("clients/add", {"client": {"email": "example"}})
+
+    def test_exact_openapi_digest_required(self):
+        client = ApiClient("https://example.test", "secret")
+        with patch("urllib.request.urlopen", return_value=Response({"other": "spec"})):
+            with self.assertRaisesRegex(ApiError, "digest differs"):
+                client.verify_contract()

@@ -4,8 +4,10 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
-from xui_fork.backup_manager import BackupError, restore_sqlite_to_new_file, sqlite_backup, verify
+from xui_fork.backup_manager import (BackupError, _write_manifest, restore_postgres_to_empty_db,
+                                     restore_sqlite_to_new_file, sqlite_backup, verify)
 
 
 class BackupTests(unittest.TestCase):
@@ -48,3 +50,19 @@ class BackupTests(unittest.TestCase):
                 "file": "../outside", "size": 0, "sha256": ""}))
             with self.assertRaisesRegex(BackupError, "unsafe"):
                 verify(folder)
+
+    def test_postgres_restore_rejects_wrong_or_nonempty_destination(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = Path(temporary)
+            archive = folder / "x-ui.dump"
+            archive.write_bytes(b"fixture archive")
+            _write_manifest(folder, archive, "postgres")
+            with self.assertRaisesRegex(BackupError, "dedicated"):
+                restore_postgres_to_empty_db(folder, "production")
+            with patch.dict("os.environ", {"PGDATABASE": "xui_restore_test"}):
+                with patch("subprocess.run") as run:
+                    run.return_value.returncode = 0
+                    run.return_value.stdout = "1\n"
+                    with self.assertRaisesRegex(BackupError, "not empty"):
+                        restore_postgres_to_empty_db(folder, "xui_restore_test")
+                    self.assertEqual(run.call_count, 1)

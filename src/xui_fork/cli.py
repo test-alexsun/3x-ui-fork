@@ -8,7 +8,8 @@ import sys
 from pathlib import Path
 
 from .api_client import ApiClient, ApiError
-from .backup_manager import BackupError, postgres_backup, restore_sqlite_to_new_file, sqlite_backup, verify
+from .backup_manager import (BackupError, postgres_backup, restore_postgres_to_empty_db,
+                             restore_sqlite_to_new_file, sqlite_backup, verify)
 from .compatibility import load_capabilities
 from .diagnostics import panel_summary
 from .installer import InstallationNotReady, require_release_artifacts
@@ -31,7 +32,9 @@ def parser() -> argparse.ArgumentParser:
     backup.add_argument("--output", type=Path, required=True)
     restore = sub.add_parser("restore")
     restore.add_argument("--backup", type=Path, required=True)
-    restore.add_argument("--to-new-file", type=Path, required=True)
+    target = restore.add_mutually_exclusive_group(required=True)
+    target.add_argument("--to-new-file", type=Path)
+    target.add_argument("--to-empty-postgres")
     for mode in MUTATING_MODES:
         sub.add_parser(mode)
     return p
@@ -39,12 +42,11 @@ def parser() -> argparse.ArgumentParser:
 
 def run(args: argparse.Namespace) -> dict:
     if args.mode in ("check", "status", "dry-run"):
+        if args.mode == "dry-run":
+            raise InstallationNotReady("dry-run requires a concrete desired-state schema and planner")
         result = {"preflight": collect(args.domain), "capabilities": load_capabilities()}
         if args.api:
             result["panel"] = panel_summary(ApiClient.from_env())
-        if args.mode == "dry-run":
-            result["plan"] = []
-            result["ready_to_apply"] = False
         return result
     if args.mode == "backup":
         if args.backend == "sqlite":
@@ -56,8 +58,11 @@ def run(args: argparse.Namespace) -> dict:
         return {"backup": str(folder), "manifest": verify(folder),
                 "warning": "backup contains secrets; store it in an encrypted volume"}
     if args.mode == "restore":
-        path = restore_sqlite_to_new_file(args.backup, args.to_new_file)
-        return {"restored_to_new_file": str(path)}
+        if args.to_new_file:
+            path = restore_sqlite_to_new_file(args.backup, args.to_new_file)
+            return {"restored_to_new_file": str(path)}
+        database = restore_postgres_to_empty_db(args.backup, args.to_empty_postgres)
+        return {"restored_to_empty_postgres": database}
     require_release_artifacts()
     raise AssertionError("unreachable")
 

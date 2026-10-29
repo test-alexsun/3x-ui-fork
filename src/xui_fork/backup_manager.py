@@ -63,7 +63,8 @@ def postgres_backup(backup_root: Path, dsn: str | None = None) -> Path:
         env["PGSERVICE"] = dsn
     try:
         with target.open("wb") as output:
-            proc = subprocess.run(["pg_dump", "--format=custom", "--no-owner", "--file=-"],
+            proc = subprocess.run(["pg_dump", "--no-password", "--format=custom",
+                                   "--no-owner", "--file=-"],
                                   env=env, stdout=output, stderr=subprocess.PIPE, check=False)
         if proc.returncode != 0 or target.stat().st_size == 0:
             raise BackupError(f"pg_dump failed (exit {proc.returncode})")
@@ -123,3 +124,32 @@ def restore_sqlite_to_new_file(folder: Path, destination: Path) -> Path:
     except Exception:
         destination.unlink(missing_ok=True)
         raise
+
+
+def restore_postgres_to_empty_db(folder: Path, database: str) -> str:
+    """Restore a custom archive into a pre-created, empty, dedicated database."""
+    manifest = verify(folder)
+    if manifest["backend"] != "postgres":
+        raise BackupError("PostgreSQL backup required")
+    if not database.startswith("xui_restore_") or not database.replace("_", "").isalnum():
+        raise BackupError("destination must be a dedicated xui_restore_* database")
+    env = os.environ.copy()
+    if env.get("PGDATABASE") != database:
+        raise BackupError("PGDATABASE must equal the explicit restore destination")
+    probe = subprocess.run(
+        ["psql", "--no-password", "--no-psqlrc", "--tuples-only", "--no-align", "--command",
+         "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname NOT IN "
+         "('pg_catalog','information_schema')"],
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, text=True,
+    )
+    if probe.returncode != 0 or probe.stdout.strip() != "0":
+        raise BackupError("PostgreSQL destination is not empty or unavailable")
+    archive = folder / "x-ui.dump"
+    result = subprocess.run(
+        ["pg_restore", "--no-password", "--exit-on-error", "--single-transaction", "--no-owner",
+         "--no-privileges", "--dbname", database, str(archive)],
+        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=False,
+    )
+    if result.returncode != 0:
+        raise BackupError(f"pg_restore failed (exit {result.returncode})")
+    return database
