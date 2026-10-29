@@ -81,4 +81,4 @@
 
 Не подтверждены ни один из шестнадцати protocol E2E, включая MASQUE; статическая поддержка в [матрице](COMPATIBILITY_MATRIX.md) не заменяет handshake и импорт подписки. Не выполнены полное покрытие Nginx stream/SNI/REALITY/XHTTP/gRPC, ACME renewal, пользовательский routing, данные PostgreSQL live panel, сохранение UUID/ключей при update и повторный install без diff.
 
-Git: исходный коммит этапа 2 — `cb65406`; изменения продолжения сохраняются отдельным локальным коммитом. До выполнения оставшихся criteria 1–16 из запроса статус остаётся **STAGE 2 INCOMPLETE**. Production deployment и `git push` не выполнялись.
+Git: исходный коммит этапа 2 — `cb65406`; код и тесты продолжения — `303a00c`. До выполнения оставшихся criteria 1–16 из запроса статус остаётся **STAGE 2 INCOMPLETE**. Production deployment и `git push` не выполнялись.
