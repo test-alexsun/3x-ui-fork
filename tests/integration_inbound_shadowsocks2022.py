@@ -70,7 +70,8 @@ def verify_udp(socks_port: int, echo_port: int) -> None:
         raise AssertionError("Shadowsocks 2022 UDP traffic did not reach echo")
 
 
-def exercise_traffic(xray: Path, config: dict, root: Path, inbound_port: int) -> None:
+def exercise_traffic(xray: Path, config: dict, root: Path, inbound_port: int,
+                     server_key: str, client_key: str) -> None:
     config_path = root / "client.json"
     config_path.write_text(json.dumps(config), encoding="utf-8")
     run("ip", "address", "add", ECHO_ADDRESS + "/32", "dev", "lo")
@@ -104,6 +105,22 @@ def exercise_traffic(xray: Path, config: dict, root: Path, inbound_port: int) ->
                 else:
                     print(safe_log_excerpt(log_path.read_text(
                         encoding="utf-8", errors="replace")))
+                    backend_file = Path("/usr/local/x-ui/bin/config.json")
+                    if backend_file.is_file():
+                        backend = json.loads(backend_file.read_text(encoding="utf-8"))
+                        matches = [row for row in backend.get("inbounds", [])
+                                   if row.get("port") == inbound_port]
+                        print(f"Backend inbound count: {len(matches)}")
+                        if len(matches) == 1:
+                            wire = normalize_embedded_json(matches[0].get("settings", {}))
+                            print("Backend protocol/method/network:",
+                                  matches[0].get("protocol"), wire.get("method"),
+                                  wire.get("network"))
+                            print("Backend client count:", len(wire.get("clients", [])))
+                            print("Backend server key matches:", wire.get("password") == server_key)
+                            print("Backend client key matches:", any(
+                                c.get("password") == client_key for c in wire.get("clients", [])
+                                if isinstance(c, dict)))
                     raise AssertionError(f"Shadowsocks 2022 TCP traffic failed: {last}")
                 verify_udp(32237, 32288)
             finally:
@@ -166,7 +183,8 @@ def main() -> None:
                                                     "password": f"{server_key}:{client_key}"}]}}],
         }
         with tempfile.TemporaryDirectory(prefix="xui-ss2022-") as directory:
-            exercise_traffic(xray, config, Path(directory), spec.port)
+            exercise_traffic(xray, config, Path(directory), spec.port,
+                             server_key, client_key)
         print("Shadowsocks 2022 API, link, RAW subscription, TCP and UDP traffic PASS")
     finally:
         api.post(f"clients/del/{spec.client_email}", {})
