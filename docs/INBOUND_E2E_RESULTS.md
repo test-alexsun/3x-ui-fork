@@ -1,6 +1,8 @@
 # Inbound E2E, GitHub Actions
 
-Последний [run 41093987364](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41093987364), commit `5be724e`: все три задания SUCCESS; WireGuard API, peer, share link, RAW-подписка, TCP и UDP через Xray userspace tunnel PASS. Первый [run 41093192127](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41093192127) выявил различие формата `allowedIPs` в API; оно исправлено перед успешным повтором.
+Последний [run 41095436539](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41095436539), commit `be6ddf9`: все три задания SUCCESS; TUIC v5 native backend, проверенный TLS, sing-box TCP и UDP PASS. Прямая ссылка и `subLinks` есть, но RAW не содержит TUIC; это подтверждённая регрессия официальной v3.11.0 ([issue #6978](https://github.com/MHSanaei/3x-ui/issues/6978)).
+
+Предыдущий [run 41093987364](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41093987364), commit `5be724e`: все три задания SUCCESS; WireGuard API, peer, share link, RAW-подписка, TCP и UDP через Xray userspace tunnel PASS. Первый [run 41093192127](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41093192127) выявил различие формата `allowedIPs` в API; оно исправлено перед успешным повтором.
 
 Ранее [run 41091316404](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41091316404), commit `8cd660c`: `unit`, `install-smoke`, `debian13` — SUCCESS; подтверждён Hysteria2 TCP/UDP. [Run 41090071019](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41090071019) подтвердил Shadowsocks 2022 TCP/UDP после усиления ожидания конфигурации Xray. Его первый [run 41038697457](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41038697457) дал отказ TCP. [Run 41037465285](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41037465285) подтвердил ML-KEM768, [run 41036717548](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41036717548) — VLESS XHTTP REALITY, [run 41035797511](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41035797511) — группу A. Исходные REALITY Vision/Mixed подтверждены [run 41031644723](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41031644723).
 
@@ -17,7 +19,7 @@
 | VMess WebSocket TLS | Xray | API + read-back | UUIDv4 | share link + RAW HTTP | verified TLS, WS → echo | SUCCESS | PASS |
 | Shadowsocks 2022 | Xray | API + read-back | server/client PSK | SIP022 link + RAW HTTP | Xray TCP and SOCKS5 UDP → echo | SUCCESS | PASS |
 | Hysteria2 | Xray | API + read-back | auth token | share link + RAW HTTP | Xray QUIC/TLS, TCP and UDP → echo | SUCCESS | PASS |
-| TUIC v5 | panel + Xray relay | no | no | no | no | no | NOT IMPLEMENTED |
+| TUIC v5 | panel + Xray relay | API + read-back | UUID + password | direct link + subLinks; RAW missing upstream | sing-box QUIC/TLS, TCP and SOCKS5 UDP → echo | SUCCESS | PASS with RAW export limitation |
 | AmneziaWG | panel | no | no | no | no | no | NOT IMPLEMENTED |
 | AmneziaWG 3.1 | panel | no | no | no | no | no | NOT IMPLEMENTED |
 | WireGuard | Xray | API + read-back | panel keypair and tunnel IP | share link + RAW HTTP | Xray userspace tunnel, TCP and SOCKS5 UDP → echo | SUCCESS | PASS |
@@ -25,4 +27,4 @@
 | Mixed SOCKS5/HTTP | Xray | API + read-back | password account | universal subscription UNSUPPORTED | SOCKS5 + HTTP → echo | SUCCESS | PASS |
 | MASQUE | Xray | no | no | share link UNSUPPORTED upstream | no | no | NOT IMPLEMENTED |
 
-Итого **11/16** профилей подтверждены реальным трафиком. VLESS XHTTP REALITY проверяет соответствие `pbk`, `sid`, SNI и пути фактическому inbound. ML-KEM768 получает пару ключей через официальный `getNewVlessEnc`, хранит её в inbound без `fallbacks` и применяет клиентскую строку шифрования при реальном подключении. Shadowsocks 2022 подтверждён TCP и UDP на Xray с раздельными 32-байтными PSK. Hysteria2 подтверждён TCP и UDP через QUIC/TLS с проверенным тестовым CA. JSON/Clash подписки, отрицательные handshake, квоты, UDP для остальных протоколов, внешний ingress и Debian 13 systemd не проверялись. Публичного ACME-выпуска и подключения с Windows также нет; эти пункты требуют контролируемой среды этапа 5. Успешный API POST сам по себе не считается E2E.
+Итого **12/16** профилей подтверждены реальным трафиком. VLESS XHTTP REALITY проверяет соответствие `pbk`, `sid`, SNI и пути фактическому inbound. ML-KEM768 получает пару ключей через официальный `getNewVlessEnc`, хранит её в inbound без `fallbacks` и применяет клиентскую строку шифрования при реальном подключении. Shadowsocks 2022 подтверждён TCP и UDP на Xray с раздельными 32-байтными PSK. Hysteria2 подтверждён TCP и UDP через QUIC/TLS с проверенным тестовым CA. JSON/Clash подписки, отрицательные handshake, квоты, UDP для остальных протоколов, внешний ingress и Debian 13 systemd не проверялись. Публичного ACME-выпуска и подключения с Windows также нет; эти пункты требуют контролируемой среды этапа 5. Успешный API POST сам по себе не считается E2E.

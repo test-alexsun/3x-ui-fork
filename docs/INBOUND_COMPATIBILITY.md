@@ -13,7 +13,7 @@
 | VMess WebSocket TLS | Xray | yes | yes | UUID | share link + RAW verified; JSON/Clash untested | PASS |
 | Shadowsocks 2022 | Xray | yes | yes | 32-byte server and client PSK | SIP022 share link + RAW verified; JSON/Clash untested | PASS TCP/UDP |
 | Hysteria2 | Xray | yes | yes | auth token | share link + RAW verified; JSON/Clash untested | PASS TCP/UDP |
-| TUIC v5 | panel runtime + Xray relay | yes | no | no | untested | no |
+| TUIC v5 | panel runtime + Xray relay | yes | yes | UUID + password | direct link and subLinks verified; RAW omits TUIC in pinned upstream | PASS TCP/UDP |
 | AmneziaWG | panel runtime | yes | no | no | untested | no |
 | AmneziaWG 3.1 | panel runtime | yes | no | no | untested | no |
 | WireGuard | Xray | yes | yes | panel-generated keypair + unique tunnel IP | share link + RAW verified; JSON/Clash untested | PASS TCP/UDP |
