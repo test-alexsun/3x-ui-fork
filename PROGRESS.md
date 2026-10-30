@@ -4,17 +4,17 @@ Branch: `codex/stage2-completion`. Preserve completed work; never push to `main`
 
 ## Verified
 
-- Groups A and B plus prior REALITY Vision and Mixed: **8 of 16** protocol profiles passed API create/read-back, compatible client, share link where supported, RAW subscription where supported, idempotence, cleanup, and real traffic.
+- Groups A and B plus prior REALITY Vision and Mixed and Shadowsocks 2022: **9 of 16** protocol profiles passed API create/read-back, compatible client, share link where supported, RAW subscription where supported, idempotence, cleanup, and real traffic.
 - Group A: VLESS WS TLS, VMess WS TLS, Trojan gRPC TLS, VLESS XHTTP TLS. CI [41035797511](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41035797511) all jobs successful.
 - Group B: VLESS XHTTP REALITY, VLESS Encryption ML-KEM768 over XHTTP/TLS. CI [41037465285](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41037465285) all jobs successful.
 - Prior profiles: VLESS REALITY Vision, Mixed SOCKS5/HTTP. Details and limits in `docs/INBOUND_E2E_RESULTS.md` and `docs/CODEX_02_FINAL.md`.
+- Shadowsocks 2022: [CI 41090071019](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41090071019) all jobs successful; TCP and SOCKS5 UDP traffic confirmed.
 
 ## Current unfinished work
 
-- Group C, Shadowsocks 2022: commit `aba220a` implements server/client keys, API, SIP022 link, RAW subscription, TCP/UDP E2E. CI [41038697457](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41038697457) failed in `install-smoke`: client reached inbound port but TCP returned `failed to read complete server response header`. Retry [41089504112](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41089504112) passed all jobs and the Shadowsocks TCP/UDP step. The inconsistent result suggests an application timing race; do not call the profile stable until the readiness hardening is verified in CI.
-- Uncommitted change in `tests/integration_inbound_shadowsocks2022.py`: wait up to 30 seconds for the panel's generated Xray config to contain the matching Shadowsocks inbound/server and client keys, then allow up to 30 TCP traffic attempts before failing. Run CI and inspect all jobs. Diagnostics print only backend protocol, method, network, client count, and booleans comparing keys. No raw server journal or key values in CI logs.
+- Group C Shadowsocks 2022 is complete after readiness hardening. Initial CI [41038697457](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41038697457) failed TCP, retry [41089504112](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41089504112) passed, and hardened run [41090071019](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41090071019) passed all jobs. The test waits for the generated Xray config to contain the attached client before real TCP/UDP traffic.
 - Automatic approval review rejected an earlier attempt to stage 120 lines of panel journal in CI because it might expose secrets. That journal output was removed. Use bounded non-secret diagnostics.
-- After Shadowsocks: Hysteria2, TUIC v5, WireGuard (Group C), then Group D profiles. Update `docs/INBOUND_COMPATIBILITY.md`, `docs/INBOUND_E2E_RESULTS.md`, and `docs/CODEX_02_FINAL.md` after each verified group.
+- Next: Hysteria2, TUIC v5, WireGuard (Group C), then Group D profiles. Update `docs/INBOUND_COMPATIBILITY.md`, `docs/INBOUND_E2E_RESULTS.md`, and `docs/CODEX_02_FINAL.md` after each verified group.
 - Remaining components: Nginx stream/SNI E2E, SSL/ACME, PostgreSQL-backed panel, cross-version update and rollback. Reports requested: `docs/NGINX_E2E.md`, `docs/SSL_E2E.md`, `docs/POSTGRESQL_PANEL_E2E.md`, `docs/UPGRADE_ROLLBACK_E2E.md`. Do not claim production readiness.
 
 ## Immediate checks before next commit

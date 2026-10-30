@@ -11,7 +11,7 @@
 | VLESS Encryption ML-KEM768 | Xray | yes | yes | UUID | share link + RAW verified; JSON/Clash untested | PASS |
 | Trojan gRPC TLS | Xray | yes | yes | password | share link + RAW verified; JSON/Clash untested | PASS |
 | VMess WebSocket TLS | Xray | yes | yes | UUID | share link + RAW verified; JSON/Clash untested | PASS |
-| Shadowsocks 2022 | Xray | yes | no | no | untested | no |
+| Shadowsocks 2022 | Xray | yes | yes | 32-byte server and client PSK | SIP022 share link + RAW verified; JSON/Clash untested | PASS TCP/UDP |
 | Hysteria2 | Xray | yes | no | no | untested | no |
 | TUIC v5 | panel runtime + Xray relay | yes | no | no | untested | no |
 | AmneziaWG | panel runtime | yes | no | no | untested | no |
