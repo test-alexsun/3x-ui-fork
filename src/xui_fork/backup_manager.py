@@ -64,7 +64,7 @@ def postgres_backup(backup_root: Path, dsn: str | None = None) -> Path:
     try:
         with target.open("wb") as output:
             proc = subprocess.run(["pg_dump", "--no-password", "--format=custom",
-                                   "--no-owner", "--file=-"],
+                                   "--no-owner"],
                                   env=env, stdout=output, stderr=subprocess.PIPE, check=False)
         if proc.returncode != 0 or target.stat().st_size == 0:
             raise BackupError(f"pg_dump failed (exit {proc.returncode})")

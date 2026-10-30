@@ -4,11 +4,12 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from xui_fork.backup_manager import (
     BackupError,
     _write_manifest,
+    postgres_backup,
     restore_postgres_to_empty_db,
     restore_sqlite_to_new_file,
     sqlite_backup,
@@ -72,3 +73,19 @@ class BackupTests(unittest.TestCase):
                     with self.assertRaisesRegex(BackupError, "not empty"):
                         restore_postgres_to_empty_db(folder, "xui_restore_test")
                     self.assertEqual(run.call_count, 1)
+
+    def test_postgres_dump_streams_archive_to_stdout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            commands = []
+
+            def invoke(args, **kwargs):
+                commands.append(args)
+                if args[0] == "pg_dump":
+                    kwargs["stdout"].write(b"PGDMP fixture")
+                return Mock(returncode=0)
+
+            with patch("xui_fork.backup_manager.subprocess.run", side_effect=invoke):
+                folder = postgres_backup(Path(temporary))
+            self.assertEqual(verify(folder)["backend"], "postgres")
+            self.assertNotIn("--file=-", commands[0])
+            self.assertEqual((folder / "x-ui.dump").read_bytes(), b"PGDMP fixture")
