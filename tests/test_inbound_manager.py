@@ -11,6 +11,7 @@ from xui_fork.inbound_manager import (
     InboundManager,
     InboundSpec,
     MixedSpec,
+    RealityXhttpSpec,
     WebTlsSpec,
     generate_reality_keypair,
 )
@@ -157,3 +158,25 @@ class InboundManagerTests(unittest.TestCase):
         self.assertGreaterEqual(len(password), 20)
         self.assertEqual(json.loads(api.rows[0]["settings"])["clients"][0]["password"],
                          password)
+
+    def test_reality_xhttp_payload_client_and_idempotence(self):
+        api = FakeApi()
+        manager = InboundManager(api, xray=Path("/fixture/xray"))
+        xhttp = RealityXhttpSpec("DE", "lab", 32127, "127.0.0.1",
+                                 "www.cloudflare.com", "www.cloudflare.com",
+                                 "/ci-reality", "xhttp@example.test")
+        with patch("xui_fork.inbound_manager.generate_reality_keypair",
+                   return_value=("a" * 43, "b" * 43)):
+            first = manager.ensure_reality_xhttp(xhttp)
+            second = manager.ensure_reality_xhttp(xhttp)
+        self.assertTrue(first["created"])
+        self.assertFalse(second["created"])
+        self.assertEqual(api.posts, ["inbounds/add", "clients/add"])
+        stream = json.loads(api.rows[0]["streamSettings"])
+        self.assertEqual(stream["network"], "xhttp")
+        self.assertEqual(stream["security"], "reality")
+        self.assertEqual(stream["xhttpSettings"]["path"], "/ci-reality")
+        self.assertEqual(stream["realitySettings"]["settings"]["publicKey"], "b" * 43)
+        self.assertEqual(api.rows[0]["disableFlow"], True)
+        client = json.loads(api.rows[0]["settings"])["clients"][0]
+        self.assertEqual(client["flow"], "")

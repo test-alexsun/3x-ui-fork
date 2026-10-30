@@ -175,6 +175,38 @@ class GrpcTlsSpec:
         require_certificate(self.cert_file, self.key_file, self.server_name)
 
 
+@dataclass(frozen=True)
+class RealityXhttpSpec:
+    country: str
+    subdomain: str
+    port: int
+    public_address: str
+    server_name: str
+    reality_target: str
+    xhttp_path: str
+    client_email: str
+
+    profile = "VLESS XHTTP REALITY"
+
+    @property
+    def remark(self) -> str:
+        return f"{self.country}-{self.subdomain} | {self.profile}"
+
+    def validate(self, panel_version: str) -> None:
+        validate_profile(self.profile, panel_version)
+        if (not COUNTRY.fullmatch(self.country) or not SUBDOMAIN.fullmatch(self.subdomain)
+                or not 1 <= self.port <= 65535 or not DOMAIN.fullmatch(self.server_name)
+                or not DOMAIN.fullmatch(self.reality_target)
+                or not EMAIL.fullmatch(self.client_email)
+                or not re.fullmatch(r"/[A-Za-z0-9/_-]{1,100}", self.xhttp_path)):
+            raise ValueError("invalid VLESS XHTTP REALITY inbound identity or transport")
+        if not DOMAIN.fullmatch(self.public_address):
+            try:
+                ipaddress.ip_address(self.public_address)
+            except ValueError as exc:
+                raise ValueError("public address must be a DNS name or IP address") from exc
+
+
 def generate_reality_keypair(xray: Path) -> tuple[str, str]:
     if not xray.is_file():
         raise InboundError("pinned Xray binary is unavailable")
@@ -223,6 +255,23 @@ def _wire_payload(spec: InboundSpec, private_key: str, public_key: str,
     }
 
 
+def _reality_xhttp_payload(spec: RealityXhttpSpec, private_key: str,
+                           public_key: str, short_id: str) -> dict:
+    payload = _wire_payload(
+        InboundSpec("VLESS REALITY Vision", spec.country, spec.subdomain, spec.port,
+                    spec.public_address, spec.server_name, spec.reality_target,
+                    spec.client_email), private_key, public_key, short_id)
+    stream = normalize_embedded_json(payload["streamSettings"])
+    stream.pop("tcpSettings")
+    stream["network"] = "xhttp"
+    stream["xhttpSettings"] = {"path": spec.xhttp_path, "host": spec.server_name,
+                               "mode": "stream-up"}
+    payload.update({"remark": spec.remark, "tag": f"in-{spec.port}-xhttp",
+                    "disableFlow": True,
+                    "streamSettings": json.dumps(stream, separators=(",", ":"))})
+    return payload
+
+
 def _web_tls_payload(spec: WebTlsSpec | GrpcTlsSpec) -> dict:
     if spec.protocol == "vless":
         settings = {"clients": [], "decryption": "none", "encryption": "none", "fallbacks": []}
@@ -269,7 +318,8 @@ def _inbounds(api: ApiClient) -> list[dict]:
     return rows
 
 
-def _matching(rows: list[dict], spec: InboundSpec | MixedSpec | WebTlsSpec | GrpcTlsSpec) -> dict | None:
+def _matching(rows: list[dict], spec: InboundSpec | MixedSpec | WebTlsSpec |
+              GrpcTlsSpec | RealityXhttpSpec) -> dict | None:
     matches = [row for row in rows if row.get("remark") == spec.remark]
     if len(matches) > 1:
         raise InboundConflict("multiple inbounds share the managed remark")
@@ -535,6 +585,81 @@ class InboundManager:
         links = self.api.read(f"clients/links/{spec.client_email}")
         if not links:
             raise InboundError("official panel returned no client connection link")
+        return {"inbound_id": inbound_id, "remark": spec.remark,
+                "client_email": spec.client_email, "created": created,
+                "links_verified": True}
+
+    def ensure_reality_xhttp(self, spec: RealityXhttpSpec,
+                             *, client_id: str | None = None) -> dict:
+        spec.validate(self.panel_version)
+        self.api.verify_contract()
+        rows = _inbounds(self.api)
+        for row in rows:
+            if row.get("port") == spec.port and row.get("remark") != spec.remark:
+                raise InboundConflict("inbound port already belongs to another profile")
+        existing = _matching(rows, spec)
+        created = False
+        if existing is None:
+            private, public = generate_reality_keypair(self.xray)
+            payload = _reality_xhttp_payload(spec, private, public, secrets.token_hex(8))
+            try:
+                self.api.post("inbounds/add", payload)
+            except ApiUncertainError:
+                existing = _matching(_inbounds(self.api), spec)
+                if existing is None:
+                    raise
+            else:
+                created = True
+            existing = _matching(_inbounds(self.api), spec)
+            if existing is None:
+                raise InboundError("XHTTP REALITY write returned success but read-back is missing")
+        inbound_id = existing.get("id")
+        if not isinstance(inbound_id, int) or inbound_id < 1 or existing.get("protocol") != "vless":
+            raise InboundConflict("existing XHTTP REALITY inbound identity differs")
+        detail = self.api.read(f"inbounds/get/{inbound_id}")
+        stream = normalize_embedded_json(detail.get("streamSettings")) if isinstance(detail, dict) else None
+        xhttp = stream.get("xhttpSettings", {}) if isinstance(stream, dict) else {}
+        reality = stream.get("realitySettings", {}) if isinstance(stream, dict) else {}
+        if (not isinstance(detail, dict) or detail.get("port") != spec.port
+                or not isinstance(stream, dict) or not isinstance(xhttp, dict)
+                or not isinstance(reality, dict)
+                or stream.get("network") != "xhttp" or stream.get("security") != "reality"
+                or xhttp.get("path") != spec.xhttp_path
+                or xhttp.get("host") != spec.server_name
+                or reality.get("target") != f"{spec.reality_target}:443"
+                or spec.server_name not in reality.get("serverNames", [])):
+            raise InboundConflict("existing XHTTP REALITY transport differs")
+        record = _client_record(self.api, spec.client_email)
+        if record is not None and client_id is None:
+            client_id = record.get("client", record).get("uuid")
+        client_id = client_id or str(uuid.uuid4())
+        if uuid.UUID(client_id).version != 4:
+            raise ValueError("client_id must be a UUIDv4")
+        if record is None:
+            client = {"id": client_id, "flow": "", "email": spec.client_email,
+                      "subId": secrets.token_hex(8), "enable": True, "limitIp": 0,
+                      "totalGB": 0, "expiryTime": 0, "tgId": 0,
+                      "comment": "", "reset": 0, "resetDay": 0,
+                      "resetWeekday": 0, "resetMax": 0}
+            try:
+                self.api.post("clients/add", {"client": client, "inboundIds": [inbound_id]})
+            except ApiUncertainError:
+                record = _client_record(self.api, spec.client_email)
+                if record is None:
+                    raise
+            record = _client_record(self.api, spec.client_email)
+        if record is None:
+            raise InboundError("XHTTP REALITY client read-back missing")
+        _verify_client(record, spec.client_email, client_id, inbound_id)
+        detail = self.api.read(f"inbounds/get/{inbound_id}")
+        settings = normalize_embedded_json(detail.get("settings"))
+        clients = settings.get("clients", []) if isinstance(settings, dict) else []
+        if not any(c.get("email") == spec.client_email and c.get("id") == client_id
+                   for c in clients if isinstance(c, dict)):
+            raise InboundError("XHTTP REALITY backend settings omit client")
+        links = self.api.read(f"clients/links/{spec.client_email}")
+        if not isinstance(links, list) or not links:
+            raise InboundError("XHTTP REALITY client share link missing")
         return {"inbound_id": inbound_id, "remark": spec.remark,
                 "client_email": spec.client_email, "created": created,
                 "links_verified": True}
