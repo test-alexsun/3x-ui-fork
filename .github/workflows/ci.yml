@@ -4,7 +4,7 @@ on:
   pull_request:
 jobs:
   unit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16
@@ -26,7 +26,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y nginx openssl postgresql-client shellcheck
       - run: bash -n bootstrap.sh install.sh
       - run: shellcheck bootstrap.sh install.sh
-      - run: ruff check src tests
+      - run: ruff check --select E4,E7,E9,F,I src tests
       - run: PYTHONPATH=src python -m unittest discover -s tests -v
       - run: PYTHONPATH=src python tests/integration_postgres.py
         env:
@@ -37,3 +37,41 @@ jobs:
           PGPASSWORD: testpass
           PGDATABASE: xui_source
       - run: PYTHONPATH=src python -m xui_fork.cli check
+  debian13:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Debian 13 container preflight and tests (no systemd claim)
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/work:ro" -w /work debian:trixie-slim \
+            sh -c 'apt-get update && apt-get install -y python3 && PYTHONPATH=src python3 -m unittest discover -s tests -v && PYTHONPATH=src python3 -m xui_fork.cli dry-run --action install'
+  install-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require real systemd on disposable runner
+        run: test -d /run/systemd/system && systemctl --version
+      - name: Fresh official panel install on loopback
+        run: |
+          sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" python3 -m xui_fork.cli dry-run --action install --panel-port 32053
+          sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" python3 -m xui_fork.cli install --panel-port 32053
+      - name: Check service, ownership state, and listener
+        run: |
+          sudo systemctl is-active --quiet x-ui
+          sudo test -f /var/lib/3x-ui-fork/state.json
+          sudo test -f /etc/x-ui/fork-credentials.json
+          ss -lnt | grep -q '127.0.0.1:32053'
+          if ss -lnt | grep -Eq '(0.0.0.0|\[::\]):32053'; then exit 1; fi
+      - name: Exercise owned repair, SQLite backup and restore, uninstall and rollback
+        run: |
+          sudo rm /usr/bin/x-ui
+          sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" python3 -m xui_fork.cli repair
+          sudo test -x /usr/bin/x-ui
+          sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" python3 -m xui_fork.cli backup --backend sqlite --source /etc/x-ui/x-ui.db --output /tmp/xui-ci-backup > /tmp/xui-backup-result.json
+          BACKUP=$(python3 -c 'import json; print(json.load(open("/tmp/xui-backup-result.json"))["backup"])')
+          sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" python3 -m xui_fork.cli restore --backup "$BACKUP" --to-new-file /tmp/x-ui-ci-restored.db
+          sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" python3 -m xui_fork.cli uninstall --confirm-uninstall
+          sudo test -f /etc/x-ui/x-ui.db
+          sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" python3 -m xui_fork.cli rollback
+          sudo systemctl is-active --quiet x-ui

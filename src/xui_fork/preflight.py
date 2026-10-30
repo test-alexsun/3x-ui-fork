@@ -29,7 +29,7 @@ def port_available(port: int, family: int = socket.AF_INET) -> bool:
             return False
 
 
-def collect(domain: str | None = None) -> dict:
+def collect(domain: str | None = None, ports: tuple[int, ...] = (80, 443)) -> dict:
     if platform.system() != "Linux":
         return {"platform": platform.system(), "supported": False, "reason": "Linux required"}
     release = os_release()
@@ -42,7 +42,7 @@ def collect(domain: str | None = None) -> dict:
         "commands": {name: bool(shutil.which(name)) for name in
                      ("python3", "systemctl", "curl", "nginx", "pg_dump", "x-ui")},
         "panel_path_exists": Path("/usr/local/x-ui").exists(),
-        "ports": {str(p): port_available(p) for p in (80, 443)},
+        "ports": {str(p): port_available(p) for p in ports},
     }
     if domain:
         try:

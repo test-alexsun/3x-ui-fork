@@ -1,4 +1,4 @@
-"""CLI entrypoint. Mutating system modes intentionally fail closed."""
+"""CLI entrypoint for system orchestration and bounded data operations."""
 
 from __future__ import annotations
 
@@ -8,15 +8,21 @@ import sys
 from pathlib import Path
 
 from .api_client import ApiClient, ApiError
-from .backup_manager import (BackupError, postgres_backup, restore_postgres_to_empty_db,
-                             restore_sqlite_to_new_file, sqlite_backup, verify)
+from .backup_manager import (
+    BackupError,
+    postgres_backup,
+    restore_postgres_to_empty_db,
+    restore_sqlite_to_new_file,
+    sqlite_backup,
+    verify,
+)
 from .compatibility import load_capabilities
 from .diagnostics import panel_summary
-from .installer import InstallationNotReady, require_release_artifacts
+from .installer import InstallationNotReady, install_clean
+from .lifecycle import _state, repair_owned, rollback_uninstall, uninstall_owned
+from .planner import Paths, plan
 from .preflight import collect
-
-
-MUTATING_MODES = ("install", "update", "repair", "rollback", "uninstall")
+from .updater import rollback_update, update_owned
 
 
 def parser() -> argparse.ArgumentParser:
@@ -26,6 +32,10 @@ def parser() -> argparse.ArgumentParser:
         command = sub.add_parser(mode)
         command.add_argument("--domain")
         command.add_argument("--api", action="store_true", help="read existing bearer credentials from env")
+        if mode == "dry-run":
+            command.add_argument("--action", choices=("install", "update", "repair", "uninstall"),
+                                 default="install")
+            command.add_argument("--panel-port", type=int, default=2053)
     backup = sub.add_parser("backup")
     backup.add_argument("--backend", choices=("sqlite", "postgres"), required=True)
     backup.add_argument("--source", type=Path, help="SQLite database path")
@@ -35,15 +45,21 @@ def parser() -> argparse.ArgumentParser:
     target = restore.add_mutually_exclusive_group(required=True)
     target.add_argument("--to-new-file", type=Path)
     target.add_argument("--to-empty-postgres")
-    for mode in MUTATING_MODES:
-        sub.add_parser(mode)
+    install = sub.add_parser("install")
+    install.add_argument("--panel-port", type=int, default=2053)
+    sub.add_parser("update")
+    sub.add_parser("repair")
+    rollback = sub.add_parser("rollback")
+    rollback.add_argument("--restore-data", action="store_true")
+    uninstall = sub.add_parser("uninstall")
+    uninstall.add_argument("--confirm-uninstall", action="store_true")
     return p
 
 
 def run(args: argparse.Namespace) -> dict:
-    if args.mode in ("check", "status", "dry-run"):
-        if args.mode == "dry-run":
-            raise InstallationNotReady("dry-run requires a concrete desired-state schema and planner")
+    if args.mode == "dry-run":
+        return plan(args.action, domain=args.domain, panel_port=args.panel_port)
+    if args.mode in ("check", "status"):
         result = {"preflight": collect(args.domain), "capabilities": load_capabilities()}
         if args.api:
             result["panel"] = panel_summary(ApiClient.from_env())
@@ -63,7 +79,18 @@ def run(args: argparse.Namespace) -> dict:
             return {"restored_to_new_file": str(path)}
         database = restore_postgres_to_empty_db(args.backup, args.to_empty_postgres)
         return {"restored_to_empty_postgres": database}
-    require_release_artifacts()
+    if args.mode == "install":
+        return install_clean(panel_port=args.panel_port)
+    if args.mode == "update":
+        return update_owned()
+    if args.mode == "repair":
+        return repair_owned()
+    if args.mode == "rollback":
+        if _state(Paths()).get("status") == "uninstalled":
+            return rollback_uninstall()
+        return rollback_update(restore_data=args.restore_data)
+    if args.mode == "uninstall":
+        return uninstall_owned(confirmed=args.confirm_uninstall)
     raise AssertionError("unreachable")
 
 

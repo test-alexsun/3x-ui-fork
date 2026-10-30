@@ -6,8 +6,14 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
-from xui_fork.backup_manager import (BackupError, _write_manifest, restore_postgres_to_empty_db,
-                                     restore_sqlite_to_new_file, sqlite_backup, verify)
+from xui_fork.backup_manager import (
+    BackupError,
+    _write_manifest,
+    restore_postgres_to_empty_db,
+    restore_sqlite_to_new_file,
+    sqlite_backup,
+    verify,
+)
 
 
 class BackupTests(unittest.TestCase):

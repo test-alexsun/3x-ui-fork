@@ -1,18 +1,37 @@
 # 3x-ui-fork
 
-An external orchestration foundation for the [official 3x-ui](https://github.com/MHSanaei/3x-ui). It does not fork or replace panel binaries. The current release is **development-only**. `install`, `update`, `repair`, `rollback`, and `uninstall` fail closed until their isolated integration and recovery gates are implemented.
+An orchestration tool for the [official 3x-ui](https://github.com/MHSanaei/3x-ui). It installs the pinned official v3.11.0 release and does not replace the panel binary with a fork.
 
-## Available commands
+**Stage 2 is incomplete.** The mutating modes have local unit coverage, but the complete Linux systemd and GitHub Actions run has not been verified. Do not use this revision for production deployment.
 
-On a Linux host with Python 3.11+:
+## Commands
+
+Run on supported Linux (Debian 12/13 or Ubuntu 24.04, amd64/arm64) with Python 3.11+:
 
 ```bash
 bash bootstrap.sh check
-bash bootstrap.sh dry-run --domain example.com
-bash bootstrap.sh status
+bash bootstrap.sh dry-run --action install --panel-port 2053
+sudo bash install.sh --panel-port 2053
+sudo bash bootstrap.sh repair
+sudo bash bootstrap.sh update
+sudo bash bootstrap.sh uninstall --confirm-uninstall
+sudo bash bootstrap.sh rollback
 ```
 
-Optional read-only API inventory requires an existing bearer token; no token is generated:
+`dry-run` is read-only and reports blockers and planned file/service changes. A clean install refuses existing panel paths and checks a free panel port. It verifies the release SHA-256, pinned script and systemd unit hashes, staged binary version, and configures the panel on `127.0.0.1` before first service start. Installation leaves the panel accessible only through an SSH tunnel until a separate HTTPS reverse proxy is configured. Root-only credentials are written to `/etc/x-ui/fork-credentials.json`.
+
+`update` applies the pinned official release only to an owned, active SQLite installation. It stops the service, snapshots the database, keeps the previous binary tree, and restores the old tree and database if health checks fail. A matching release returns `changed: false`. PostgreSQL-backed panel update is not supported. `repair` restores missing owned unit/CLI files and starts the service; it refuses modified files. `uninstall` moves owned binaries into a recoverable checkpoint and keeps `/etc/x-ui` and certificates. `rollback` restores the last uninstall or update. A rollback across panel versions requires `--restore-data` because SQLite schema compatibility is not guaranteed.
+
+### Backup and restore
+
+```bash
+sudo bash bootstrap.sh backup --backend sqlite --source /etc/x-ui/x-ui.db --output /secure/encrypted-volume
+sudo bash bootstrap.sh restore --backup /secure/encrypted-volume/xui-... --to-new-file /tmp/x-ui-restored.db
+```
+
+SQLite backup uses the online backup API and checks integrity and SHA-256. Restore writes a new file only. PostgreSQL backup uses `pg_dump --format=custom`; restore requires a pre-created empty `xui_restore_*` database. Configure libpq through `PG*` environment variables or a service file. Backups contain secrets; use encrypted storage. The update mode currently has a separate automatic SQLite checkpoint.
+
+### Existing panel API inventory
 
 ```bash
 export XUI_API_ORIGIN=https://panel.example.com
@@ -21,21 +40,6 @@ export XUI_API_TOKEN='existing-token'
 bash bootstrap.sh status --api
 ```
 
-The API adapter sends tokens only over HTTPS, except localhost HTTP. Inventory output contains counts rather than client secrets. `check` and `status` do not call state-changing panel endpoints. `dry-run` currently exits with an error because no desired-state planner exists; it does not return an empty success plan.
+The API adapter permits remote bearer tokens only over HTTPS and reports counts without client secrets. Nginx include rendering, certificate validation, and profile compatibility checks exist as library functions. The 16 protocol creation workflows, ACME, Nginx stream routing, and live API validation are not complete.
 
-### Database snapshot and isolated restore
-
-```bash
-bash bootstrap.sh backup --backend sqlite --source /etc/x-ui/x-ui.db --output /secure/encrypted-volume
-bash bootstrap.sh restore --backup /secure/encrypted-volume/xui-... --to-new-file /tmp/x-ui-restored.db
-```
-
-SQLite uses the online backup API, includes committed WAL content, checks integrity and SHA-256, and restores only to a new path. PostgreSQL backup uses `pg_dump --format=custom` and checks the archive with `pg_restore --list`; configure libpq through `PG*` environment or a service file. Backups contain secrets in plaintext and must be stored on an encrypted volume. Full machine checkpoints and in-place production restore are not implemented.
-
-PostgreSQL restore is limited to a pre-created empty database named `xui_restore_*`. Set `PGDATABASE` to the same name and use `--to-empty-postgres xui_restore_NAME`. It uses a single transaction and refuses a nonempty destination. It does not switch the running panel to that database.
-
-The Python library also contains a managed Nginx panel-site renderer and an atomic include apply with `nginx -t`, reload, and local include rollback. The CLI does not expose it until system-level integration is validated. Certificate checks require an exact DNS SAN, a matching private key, and at least seven days of validity.
-
-`bash install.sh` currently exits with a clear error. There is no supported one-command installation yet. The upstream installer and release archive can be fetched and checked against pinned hashes in the Python library, but they are not executed by this release.
-
-See [implementation status](docs/CODEX_02_IMPLEMENTATION.md) and the [stage 1 architecture](docs/CODEX_01_ARCHITECTURE.md).
+See [implementation history](docs/CODEX_02_IMPLEMENTATION.md), [current completion report](docs/CODEX_02_COMPLETION.md), and the [stage 1 architecture](docs/CODEX_01_ARCHITECTURE.md).
