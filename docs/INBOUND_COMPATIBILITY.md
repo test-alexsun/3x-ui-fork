@@ -16,7 +16,7 @@
 | TUIC v5 | panel runtime + Xray relay | yes | no | no | untested | no |
 | AmneziaWG | panel runtime | yes | no | no | untested | no |
 | AmneziaWG 3.1 | panel runtime | yes | no | no | untested | no |
-| WireGuard | Xray | yes | no | no | untested | no |
+| WireGuard | Xray | yes | yes | panel-generated keypair + unique tunnel IP | share link + RAW verified; JSON/Clash untested | PASS TCP/UDP |
 | MTProto | mtg-multi sidecar | yes | no | no | untested | no |
 | Mixed SOCKS5/HTTP | Xray | yes | yes | password account | universal subscription UNSUPPORTED | PASS |
 | MASQUE | Xray | yes | no | no | share link/Clash UNSUPPORTED; JSON untested | no |
