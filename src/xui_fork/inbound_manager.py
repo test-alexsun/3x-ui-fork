@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import ipaddress
 import json
 import platform
@@ -244,6 +245,37 @@ class MlkemTlsSpec:
         require_certificate(self.cert_file, self.key_file, self.server_name)
 
 
+@dataclass(frozen=True)
+class Shadowsocks2022Spec:
+    country: str
+    subdomain: str
+    port: int
+    public_address: str
+    client_email: str
+
+    profile = "Shadowsocks 2022"
+    method = "2022-blake3-aes-256-gcm"
+
+    @property
+    def remark(self) -> str:
+        return f"{self.country}-{self.subdomain} | {self.profile}"
+
+    def validate(self, panel_version: str) -> None:
+        validate_profile(self.profile, panel_version)
+        if (not COUNTRY.fullmatch(self.country) or not SUBDOMAIN.fullmatch(self.subdomain)
+                or not 1 <= self.port <= 65535 or not EMAIL.fullmatch(self.client_email)):
+            raise ValueError("invalid Shadowsocks 2022 inbound identity")
+        if not DOMAIN.fullmatch(self.public_address):
+            try:
+                ipaddress.ip_address(self.public_address)
+            except ValueError as exc:
+                raise ValueError("public address must be a DNS name or IP address") from exc
+
+
+def _ss2022_key() -> str:
+    return base64.b64encode(secrets.token_bytes(32)).decode("ascii")
+
+
 def generate_reality_keypair(xray: Path) -> tuple[str, str]:
     if not xray.is_file():
         raise InboundError("pinned Xray binary is unavailable")
@@ -362,7 +394,8 @@ def _inbounds(api: ApiClient) -> list[dict]:
 
 
 def _matching(rows: list[dict], spec: InboundSpec | MixedSpec | WebTlsSpec |
-              GrpcTlsSpec | RealityXhttpSpec | MlkemTlsSpec) -> dict | None:
+              GrpcTlsSpec | RealityXhttpSpec | MlkemTlsSpec |
+              Shadowsocks2022Spec) -> dict | None:
     matches = [row for row in rows if row.get("remark") == spec.remark]
     if len(matches) > 1:
         raise InboundConflict("multiple inbounds share the managed remark")
@@ -598,6 +631,97 @@ class InboundManager:
             raise InboundConflict("existing Mixed account differs")
         return {"inbound_id": inbound_id, "remark": spec.remark, "created": created,
                 "account_verified": True}
+
+    def ensure_shadowsocks_2022(self, spec: Shadowsocks2022Spec) -> dict:
+        spec.validate(self.panel_version)
+        self.api.verify_contract()
+        rows = _inbounds(self.api)
+        for row in rows:
+            if row.get("port") == spec.port and row.get("remark") != spec.remark:
+                raise InboundConflict("inbound port already belongs to another profile")
+        existing = _matching(rows, spec)
+        created = False
+        if existing is None:
+            settings = {"method": spec.method, "password": _ss2022_key(),
+                        "network": "tcp,udp", "clients": [], "ivCheck": False}
+            payload = {"up": 0, "down": 0, "total": 0, "remark": spec.remark,
+                       "enable": True, "expiryTime": 0, "trafficReset": "never",
+                       "trafficResetDay": 1, "lastTrafficResetTime": 0,
+                       "listen": "127.0.0.1", "port": spec.port,
+                       "protocol": "shadowsocks",
+                       "settings": json.dumps(settings, separators=(",", ":")),
+                       "streamSettings": json.dumps({"network": "tcp", "security": "none"}),
+                       "sniffing": json.dumps({"enabled": False}),
+                       "tag": f"in-{spec.port}-tcp", "shareAddrStrategy": "custom",
+                       "shareAddr": spec.public_address, "subSortIndex": 1,
+                       "excludeFromSub": False, "disableFlow": True}
+            try:
+                self.api.post("inbounds/add", payload)
+            except ApiUncertainError:
+                existing = _matching(_inbounds(self.api), spec)
+                if existing is None:
+                    raise
+            else:
+                created = True
+            existing = _matching(_inbounds(self.api), spec)
+            if existing is None:
+                raise InboundError("Shadowsocks 2022 write returned success but read-back missing")
+        inbound_id = existing.get("id")
+        if (not isinstance(inbound_id, int) or inbound_id < 1
+                or existing.get("protocol") != "shadowsocks"):
+            raise InboundConflict("existing Shadowsocks 2022 inbound identity differs")
+        detail = self.api.read(f"inbounds/get/{inbound_id}")
+        settings = normalize_embedded_json(detail.get("settings")) if isinstance(detail, dict) else None
+        stream = normalize_embedded_json(detail.get("streamSettings")) if isinstance(detail, dict) else None
+        if (not isinstance(detail, dict) or detail.get("port") != spec.port
+                or not isinstance(settings, dict) or not isinstance(stream, dict)
+                or settings.get("method") != spec.method
+                or settings.get("network") != "tcp,udp"
+                or stream.get("network") != "tcp" or stream.get("security") != "none"):
+            raise InboundConflict("existing Shadowsocks 2022 settings differ")
+        server_key = settings.get("password")
+        try:
+            valid_server_key = len(base64.b64decode(server_key, validate=True)) == 32
+        except (ValueError, TypeError):
+            valid_server_key = False
+        if not valid_server_key:
+            raise InboundConflict("existing Shadowsocks 2022 server key invalid")
+        record = _client_record(self.api, spec.client_email)
+        if record is None:
+            client = {"method": "", "password": _ss2022_key(),
+                      "email": spec.client_email, "subId": secrets.token_hex(8),
+                      "enable": True, "limitIp": 0, "totalGB": 0,
+                      "expiryTime": 0, "tgId": 0, "comment": "",
+                      "reset": 0, "resetDay": 0, "resetWeekday": 0, "resetMax": 0}
+            try:
+                self.api.post("clients/add", {"client": client, "inboundIds": [inbound_id]})
+            except ApiUncertainError:
+                record = _client_record(self.api, spec.client_email)
+                if record is None:
+                    raise
+            record = _client_record(self.api, spec.client_email)
+        if not isinstance(record, dict):
+            raise InboundError("Shadowsocks 2022 client read-back missing")
+        observed = record.get("client", record)
+        client_key = observed.get("password") if isinstance(observed, dict) else None
+        try:
+            valid_client_key = len(base64.b64decode(client_key, validate=True)) == 32
+        except (ValueError, TypeError):
+            valid_client_key = False
+        if (not valid_client_key or observed.get("email") != spec.client_email
+                or inbound_id not in record.get("inboundIds", [])):
+            raise InboundConflict("Shadowsocks 2022 client identity or attachment differs")
+        detail = self.api.read(f"inbounds/get/{inbound_id}")
+        settings = normalize_embedded_json(detail.get("settings"))
+        if not any(c.get("email") == spec.client_email and c.get("password") == client_key
+                   for c in settings.get("clients", []) if isinstance(c, dict)):
+            raise InboundError("Shadowsocks 2022 backend settings omit client")
+        links = self.api.read(f"clients/links/{spec.client_email}")
+        if not isinstance(links, list) or not links:
+            raise InboundError("Shadowsocks 2022 share link missing")
+        return {"inbound_id": inbound_id, "remark": spec.remark,
+                "client_email": spec.client_email, "created": created,
+                "links_verified": True}
 
     def ensure_reality_vision(self, spec: InboundSpec, *, client_id: str | None = None) -> dict:
         spec.validate(self.panel_version)

@@ -13,6 +13,7 @@ from xui_fork.inbound_manager import (
     MixedSpec,
     MlkemTlsSpec,
     RealityXhttpSpec,
+    Shadowsocks2022Spec,
     WebTlsSpec,
     generate_reality_keypair,
 )
@@ -203,3 +204,21 @@ class InboundManagerTests(unittest.TestCase):
         self.assertTrue(settings["decryption"].startswith("mlkem768x25519plus.native."))
         self.assertTrue(settings["encryption"].startswith("mlkem768x25519plus.native."))
         self.assertEqual(json.loads(api.rows[0]["streamSettings"])["network"], "xhttp")
+
+    def test_shadowsocks_2022_server_and_client_keys_are_stable(self):
+        api = FakeApi()
+        manager = InboundManager(api)
+        ss = Shadowsocks2022Spec("DE", "lab", 32129, "127.0.0.1",
+                                 "ss@example.test")
+        first = manager.ensure_shadowsocks_2022(ss)
+        detail = json.loads(api.rows[0]["settings"])
+        server_key = detail["password"]
+        client_key = detail["clients"][0]["password"]
+        second = manager.ensure_shadowsocks_2022(ss)
+        self.assertTrue(first["created"])
+        self.assertFalse(second["created"])
+        self.assertEqual(api.posts, ["inbounds/add", "clients/add"])
+        self.assertEqual(detail["method"], "2022-blake3-aes-256-gcm")
+        self.assertEqual(detail["network"], "tcp,udp")
+        self.assertEqual(json.loads(api.rows[0]["settings"])["password"], server_key)
+        self.assertEqual(api.clients[ss.client_email]["client"]["password"], client_key)
