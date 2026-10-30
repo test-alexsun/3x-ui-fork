@@ -76,7 +76,7 @@ def main() -> None:
         reality = stream["realitySettings"]
         record = api.read(f"clients/get/{spec.client_email}")
         client = record.get("client", record)
-        client_id = client.get("id") or client.get("uuid")
+        client_id = client["uuid"]
         short_id = reality["shortIds"][0]
         public_key = reality["settings"]["publicKey"]
         config = {

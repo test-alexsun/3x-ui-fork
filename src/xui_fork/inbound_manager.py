@@ -165,7 +165,8 @@ def _verify_client(record: dict, email: str, client_id: str, inbound_id: int) ->
     client = record.get("client", record)
     if not isinstance(client, dict) or client.get("email") != email:
         raise InboundError("client read-back does not match email")
-    actual_id = client.get("id") or client.get("uuid")
+    # The client registry exposes a numeric database id and a separate Xray UUID.
+    actual_id = client.get("uuid")
     if actual_id != client_id:
         raise InboundConflict("existing client identity differs from requested UUID")
     links = record.get("inboundIds", [])
@@ -210,7 +211,7 @@ class InboundManager:
         record = _client_record(self.api, spec.client_email)
         if record is not None and client_id is None:
             existing_client = record.get("client", record)
-            client_id = existing_client.get("id") or existing_client.get("uuid")
+            client_id = existing_client.get("uuid")
         client_id = client_id or str(uuid.uuid4())
         if uuid.UUID(client_id).version != 4:
             raise ValueError("client_id must be a UUIDv4")

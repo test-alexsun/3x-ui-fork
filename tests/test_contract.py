@@ -4,8 +4,13 @@ import unittest
 import urllib.error
 from unittest.mock import patch
 
-from xui_fork.api_client import (REQUIRED_OPERATIONS, ApiClient, ApiError,
-                                 ApiUncertainError, normalize_embedded_json)
+from xui_fork.api_client import (
+    REQUIRED_OPERATIONS,
+    ApiClient,
+    ApiError,
+    ApiUncertainError,
+    normalize_embedded_json,
+)
 from xui_fork.compatibility import profile_supported, version_supported
 
 

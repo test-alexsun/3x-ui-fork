@@ -41,7 +41,10 @@ class FakeApi:
             self.rows.append({**payload, "id": 9})
         elif path == "clients/add":
             client = payload["client"]
-            self.clients[client["email"]] = {"client": client, "inboundIds": payload["inboundIds"]}
+            self.clients[client["email"]] = {
+                "client": {**client, "id": 17, "uuid": client["id"]},
+                "inboundIds": payload["inboundIds"],
+            }
             settings = json.loads(self.rows[0]["settings"])
             settings["clients"].append(client)
             self.rows[0]["settings"] = json.dumps(settings)
@@ -67,7 +70,7 @@ class InboundManagerTests(unittest.TestCase):
         self.assertTrue(first["created"])
         self.assertFalse(second["created"])
         self.assertEqual(api.posts, ["inbounds/add", "clients/add"])
-        self.assertEqual(api.clients[spec().client_email]["client"]["id"], client_id)
+        self.assertEqual(api.clients[spec().client_email]["client"]["uuid"], client_id)
         self.assertIsInstance(api.rows[0]["settings"], str)
         self.assertEqual(json.loads(api.rows[0]["streamSettings"])["security"], "reality")
 
