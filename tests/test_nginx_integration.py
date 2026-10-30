@@ -27,5 +27,6 @@ class NginxSyntaxIntegration(unittest.TestCase):
             config = root / "nginx.conf"
             config.write_text(f"error_log stderr notice;\npid {root / 'nginx.pid'};\n"
                               f"events {{}}\nhttp {{ include {site}; }}\n")
-            subprocess.run(["nginx", "-t", "-p", str(root), "-c", str(config)], check=True,
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            result = subprocess.run(["nginx", "-t", "-p", str(root), "-c", str(config)],
+                                    check=False, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
