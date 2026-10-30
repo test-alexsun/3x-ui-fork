@@ -53,9 +53,7 @@ def token_from_cli(binary: Path) -> str:
 
 
 def safe_log_excerpt(text: str) -> str:
-    lines = [line for line in text.splitlines()
-             if any(word in line.lower() for word in ("failed", "error", "reality", "accepted"))]
-    selected = "\n".join(lines[-20:])[-3000:]
+    selected = "\n".join(text.splitlines()[-80:])[-6500:]
     selected = re.sub(r"[A-Za-z0-9_-]{40,}", "[redacted]", selected)
     return re.sub(r"\b[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\b",
                   "[redacted-uuid]", selected)
