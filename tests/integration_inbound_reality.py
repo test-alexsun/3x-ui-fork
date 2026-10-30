@@ -52,6 +52,15 @@ def token_from_cli(binary: Path) -> str:
     return match.group(1)
 
 
+def safe_log_excerpt(text: str) -> str:
+    lines = [line for line in text.splitlines()
+             if any(word in line.lower() for word in ("failed", "error", "reality", "accepted"))]
+    selected = "\n".join(lines[-20:])[-3000:]
+    selected = re.sub(r"[A-Za-z0-9_-]{40,}", "[redacted]", selected)
+    return re.sub(r"\b[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\b",
+                  "[redacted-uuid]", selected)
+
+
 def main() -> None:
     if os.environ.get("XUI_RUN_INBOUND_E2E") != "1":
         raise RuntimeError("disposable inbound E2E must be explicitly enabled")
@@ -80,7 +89,7 @@ def main() -> None:
         short_id = reality["shortIds"][0]
         public_key = reality["settings"]["publicKey"]
         config = {
-            "log": {"loglevel": "warning"},
+            "log": {"loglevel": "debug"},
             "inbounds": [{"tag": "ci-socks", "listen": "127.0.0.1", "port": 32122,
                           "protocol": "socks", "settings": {"auth": "noauth", "udp": False}}],
             "outbounds": [{"tag": "ci-vless", "protocol": "vless",
@@ -121,6 +130,13 @@ def main() -> None:
                         last = f"curl exit={result.returncode}: {result.stderr.strip()}"
                         time.sleep(1)
                     else:
+                        client_log = safe_log_excerpt((root / "xray-client.log").read_text(
+                            encoding="utf-8", errors="replace"))
+                        panel_log = subprocess.run(
+                            ["journalctl", "-u", "x-ui", "-n", "100", "--no-pager"],
+                            capture_output=True, text=True, timeout=10)
+                        print("Xray client diagnostics:\n" + client_log)
+                        print("Panel Xray diagnostics:\n" + safe_log_excerpt(panel_log.stdout))
                         raise AssertionError(f"VLESS REALITY client traffic failed: {last}")
                 finally:
                     process.terminate()
