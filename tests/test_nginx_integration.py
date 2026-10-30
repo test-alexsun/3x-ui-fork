@@ -26,7 +26,8 @@ class NginxSyntaxIntegration(unittest.TestCase):
             site.write_text(render_panel_site("panel.example.test", cert, key, 18080))
             config = root / "nginx.conf"
             config.write_text(f"error_log stderr notice;\npid {root / 'nginx.pid'};\n"
-                              f"events {{}}\nhttp {{ include {site}; }}\n")
+                              f"events {{}}\nhttp {{ access_log {root / 'access.log'}; "
+                              f"include {site}; }}\n")
             result = subprocess.run(["nginx", "-t", "-p", str(root), "-c", str(config)],
                                     check=False, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)

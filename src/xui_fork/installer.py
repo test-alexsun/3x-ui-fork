@@ -200,7 +200,8 @@ def install_clean(*, panel_port: int = 2053, paths: Paths = Paths()) -> dict:
         base_path = secrets.token_urlsafe(18)
         try:
             if any(path.exists() or path.is_symlink() for path in
-                   (paths.panel, paths.database, paths.unit, paths.command, paths.state)):
+                   (paths.panel, paths.database, paths.unit, paths.command,
+                    paths.state, paths.service_env)):
                 raise InstallationNotReady("installation target changed after preflight")
             os.replace(unpacked, paths.panel)
             created.append(paths.panel)

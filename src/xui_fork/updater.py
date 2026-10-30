@@ -52,7 +52,8 @@ def update_owned(paths: Paths = Paths()) -> dict:
     if state.get("status") != "installed":
         raise InstallationNotReady("update requires installed ownership state")
     _verify_owned(paths, state)
-    if not (paths.database / "x-ui.db").is_file() or Path("/etc/default/x-ui").exists():
+    if (not (paths.database / "x-ui.db").is_file() or
+            paths.service_env.exists() or paths.service_env.is_symlink()):
         raise InstallationNotReady("update currently supports owned SQLite installs without PG env")
     if _run(["systemctl", "is-active", "x-ui"]).strip() != "active":
         raise InstallationNotReady("update requires an active owned panel")

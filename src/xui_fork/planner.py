@@ -16,6 +16,7 @@ class Paths:
     state: Path = Path("/var/lib/3x-ui-fork/state.json")
     nginx: Path = Path("/etc/nginx/conf.d/3x-ui-fork.conf")
     command: Path = Path("/usr/bin/x-ui")
+    service_env: Path = Path("/etc/default/x-ui")
 
 
 @dataclass(frozen=True)
@@ -37,12 +38,13 @@ def plan(action: str, *, paths: Paths = Paths(), domain: str | None = None,
     database = paths.database.exists() or paths.database.is_symlink()
     unit = paths.unit.exists() or paths.unit.is_symlink()
     command = paths.command.exists() or paths.command.is_symlink()
+    service_env = paths.service_env.exists() or paths.service_env.is_symlink()
     blockers: list[str] = []
     steps: list[Step] = []
     if not observed.get("supported"):
         blockers.append("unsupported OS or architecture")
     if action == "install":
-        if any((owned, panel, database, unit, command)):
+        if any((owned, panel, database, unit, command, service_env)):
             blockers.append("existing panel, data, unit, or ownership state; use update/adoption")
         if not observed.get("root"):
             blockers.append("root privileges required")

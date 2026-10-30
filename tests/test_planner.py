@@ -21,6 +21,16 @@ class PlannerTests(unittest.TestCase):
             self.assertFalse(conflict["ready_to_apply"])
             self.assertIn("existing panel", conflict["blockers"][0])
 
+    def test_existing_service_environment_blocks_clean_install(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = Paths(root / "panel", root / "db", root / "unit", root / "state",
+                          root / "nginx", root / "command", root / "x-ui.env")
+            paths.service_env.write_text("DB_TYPE=postgres\n", encoding="utf-8")
+            inventory = {"supported": True, "root": True,
+                         "commands": {"systemctl": True}, "ports": {"2053": True}}
+            self.assertFalse(plan("install", paths=paths, inventory=inventory)["ready_to_apply"])
+
     def test_dry_run_reports_blockers_without_mutation(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

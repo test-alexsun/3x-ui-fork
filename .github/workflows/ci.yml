@@ -68,6 +68,8 @@ jobs:
           sudo rm /usr/bin/x-ui
           sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" python3 -m xui_fork.cli repair
           sudo test -x /usr/bin/x-ui
+          sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" python3 -m xui_fork.cli update > /tmp/xui-update-result.json
+          python3 -c 'import json; assert json.load(open("/tmp/xui-update-result.json"))["changed"] is False'
           sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" python3 -m xui_fork.cli backup --backend sqlite --source /etc/x-ui/x-ui.db --output /tmp/xui-ci-backup > /tmp/xui-backup-result.json
           BACKUP=$(python3 -c 'import json; print(json.load(open("/tmp/xui-backup-result.json"))["backup"])')
           sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" python3 -m xui_fork.cli restore --backup "$BACKUP" --to-new-file /tmp/x-ui-ci-restored.db
