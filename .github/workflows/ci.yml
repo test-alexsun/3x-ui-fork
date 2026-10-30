@@ -77,6 +77,16 @@ jobs:
         run: sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" XUI_RUN_INBOUND_HYSTERIA2_E2E=1 python3 tests/integration_inbound_hysteria2.py
       - name: WireGuard API, peer, subscription, and TCP/UDP Xray traffic
         run: sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" XUI_RUN_INBOUND_WIREGUARD_E2E=1 python3 tests/integration_inbound_wireguard.py
+      - name: Download pinned sing-box TUIC client
+        run: |
+          curl --fail --location --silent --show-error --retry 3 --max-time 120 \
+            https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-amd64-glibc.tar.gz \
+            -o /tmp/sing-box-tuic.tar.gz
+          echo '231e57c18378f780a08de832844a1ca9716e17a7bcf82964b350844d243c03ac  /tmp/sing-box-tuic.tar.gz' | sha256sum -c -
+          tar -xzf /tmp/sing-box-tuic.tar.gz -C /tmp sing-box-1.14.4-linux-amd64-glibc/sing-box
+          test -x /tmp/sing-box-1.14.4-linux-amd64-glibc/sing-box
+      - name: TUIC v5 native backend, link, TLS, and TCP/UDP sing-box traffic
+        run: sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" XUI_RUN_INBOUND_TUIC_E2E=1 python3 tests/integration_inbound_tuic.py
       - name: Exercise owned repair, SQLite backup and restore, uninstall and rollback
         run: |
           sudo rm /usr/bin/x-ui

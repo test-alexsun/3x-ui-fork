@@ -16,6 +16,7 @@ from xui_fork.inbound_manager import (
     MlkemTlsSpec,
     RealityXhttpSpec,
     Shadowsocks2022Spec,
+    TuicSpec,
     WebTlsSpec,
     WireguardSpec,
     generate_reality_keypair,
@@ -286,3 +287,23 @@ class InboundManagerTests(unittest.TestCase):
                     return_value=Mock(stdout="PrivateKey: invalid\nPublicKey: invalid\n"))):
             with self.assertRaises(InboundError):
                 generate_wireguard_keypair(Path("/fixture/xray"))
+
+    def test_tuic_native_server_client_and_idempotence(self):
+        api = FakeApi()
+        manager = InboundManager(api)
+        tuic = TuicSpec("DE", "lab", 32132, "127.0.0.1", "ci.example.test",
+                        "tuic@example.test", Path.cwd() / "ci-cert.pem",
+                        Path.cwd() / "ci-key.pem")
+        with patch("xui_fork.inbound_manager.require_certificate"):
+            first = manager.ensure_tuic_v5(tuic)
+            second = manager.ensure_tuic_v5(tuic)
+        self.assertTrue(first["created"])
+        self.assertFalse(second["created"])
+        self.assertEqual(api.posts, ["inbounds/add", "clients/add"])
+        self.assertEqual(api.rows[0]["protocol"], "tuic")
+        settings = json.loads(api.rows[0]["settings"])
+        self.assertEqual(settings["server"]["alpn"], ["h3"])
+        self.assertEqual(settings["server"]["udp_relay_mode"], "native")
+        self.assertEqual(settings["server"]["sni"], "ci.example.test")
+        self.assertEqual(settings["clients"][0]["uuid"],
+                         api.clients[tuic.client_email]["client"]["uuid"])
