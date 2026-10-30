@@ -7,8 +7,8 @@
 | VLESS REALITY Vision | Xray | yes | yes | UUID | RAW verified; JSON/Clash untested | PASS |
 | VLESS WebSocket TLS | Xray | yes | yes | UUID | share link + RAW verified; JSON/Clash untested | PASS |
 | VLESS XHTTP TLS | Xray | yes | yes | UUID | share link + RAW verified; JSON/Clash untested | PASS |
-| VLESS XHTTP REALITY | Xray | yes | no | no | untested | no |
-| VLESS Encryption ML-KEM768 | Xray | yes | no | no | untested | no |
+| VLESS XHTTP REALITY | Xray | yes | yes | UUID | share link + RAW verified; JSON/Clash untested | PASS |
+| VLESS Encryption ML-KEM768 | Xray | yes | yes | UUID | share link + RAW verified; JSON/Clash untested | PASS |
 | Trojan gRPC TLS | Xray | yes | yes | password | share link + RAW verified; JSON/Clash untested | PASS |
 | VMess WebSocket TLS | Xray | yes | yes | UUID | share link + RAW verified; JSON/Clash untested | PASS |
 | Shadowsocks 2022 | Xray | yes | no | no | untested | no |
