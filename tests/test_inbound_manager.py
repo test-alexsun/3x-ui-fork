@@ -82,9 +82,12 @@ class InboundManagerTests(unittest.TestCase):
         self.assertEqual(api.posts, [])
 
     def test_keypair_parser_requires_real_xray_output(self):
-        output = "Private key: " + "a" * 43 + "\nPublic key: " + "b" * 43 + "\n"
-        with (patch.object(Path, "is_file", return_value=True),
-              patch("xui_fork.inbound_manager.subprocess.run",
-                    return_value=Mock(stdout=output))):
-            self.assertEqual(generate_reality_keypair(Path("/fixture/xray")),
-                             ("a" * 43, "b" * 43))
+        for output in (
+            "Private key: " + "a" * 43 + "\nPublic key: " + "b" * 43 + "\n",
+            "PrivateKey: " + "a" * 43 + "\nPassword (PublicKey): " + "b" * 43 + "\n",
+        ):
+            with (patch.object(Path, "is_file", return_value=True),
+                  patch("xui_fork.inbound_manager.subprocess.run",
+                        return_value=Mock(stdout=output))):
+                self.assertEqual(generate_reality_keypair(Path("/fixture/xray")),
+                                 ("a" * 43, "b" * 43))

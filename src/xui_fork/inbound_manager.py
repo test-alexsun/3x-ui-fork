@@ -84,9 +84,12 @@ def generate_reality_keypair(xray: Path) -> tuple[str, str]:
     for line in result.stdout.splitlines():
         if ":" in line:
             key, value = line.split(":", 1)
-            values[key.strip().lower().replace(" ", "")] = value.strip()
+            label = key.strip().lower().replace(" ", "")
+            if label in {"privatekey", "publickey", "password", "password(publickey)"}:
+                values[label] = value.strip()
     private = values.get("privatekey")
-    public = values.get("publickey") or values.get("password")
+    public = (values.get("publickey") or values.get("password") or
+              values.get("password(publickey)"))
     if not private or not public or not all(re.fullmatch(r"[A-Za-z0-9_-]{43,44}", x)
                                          for x in (private, public)):
         raise InboundError("Xray returned no usable REALITY X25519 keypair")
