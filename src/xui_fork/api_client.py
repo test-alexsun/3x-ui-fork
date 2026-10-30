@@ -28,6 +28,7 @@ READ_DYNAMIC = re.compile(
 WRITE_PATHS = frozenset({"inbounds/add", "clients/add"})
 WRITE_DYNAMIC = re.compile(r"^(?:inbounds/del/[1-9][0-9]*|clients/del/[A-Za-z0-9_.+@-]+)$")
 OPENAPI_SHA256_311 = "e26231888ccd904831f1bc3440d6e6faecaf721c4550daaaa2eb24abac58625f"
+OPENAPI_CANONICAL_SHA256_311 = "e0ca650cd432f8ae7d7ed8d92093bbeae6109a1af2810291c65a055ff6ff722e"
 MAX_RESPONSE = 8 * 1024 * 1024
 
 
@@ -93,14 +94,20 @@ class ApiClient:
     def verify_contract(self) -> bool:
         body = self._request("GET", "openapi.json")
         actual = hashlib.sha256(body).hexdigest()
-        if actual != OPENAPI_SHA256_311:
-            try:
-                document = json.loads(body)
-                kind = document.get("openapi", "other JSON") if isinstance(document, dict) else "JSON array"
-            except ValueError:
-                kind = "non-JSON"
-            raise ApiError(f"panel OpenAPI digest differs from tested 3.11.0 contract "
-                           f"(actual SHA-256 {actual}; response {kind})")
+        if actual == OPENAPI_SHA256_311:
+            return True
+        try:
+            document = json.loads(body)
+            canonical = json.dumps(document, ensure_ascii=False, sort_keys=True,
+                                   separators=(",", ":")).encode("utf-8")
+            canonical_hash = hashlib.sha256(canonical).hexdigest()
+            kind = document.get("openapi", "other JSON") if isinstance(document, dict) else "JSON array"
+        except ValueError:
+            canonical_hash = "invalid"
+            kind = "non-JSON"
+        if canonical_hash != OPENAPI_CANONICAL_SHA256_311:
+            raise ApiError(f"panel OpenAPI differs from tested 3.11.0 contract "
+                           f"(raw SHA-256 {actual}; canonical {canonical_hash}; response {kind})")
         return True
 
     def post(self, path: str, payload: dict) -> object:

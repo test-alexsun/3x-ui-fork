@@ -1,3 +1,4 @@
+import hashlib
 import json
 import unittest
 import urllib.error
@@ -54,8 +55,15 @@ class ContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ApiUncertainError, "partly applied"):
                 client.post("clients/add", {"client": {"email": "example"}})
 
-    def test_exact_openapi_digest_required(self):
+    def test_semantic_openapi_digest_accepts_formatting_only(self):
         client = ApiClient("https://example.test", "secret")
+        document = {"openapi": "3.0.3", "paths": {"/b": {}, "/a": {}}}
+        canonical = json.dumps(document, ensure_ascii=False, sort_keys=True,
+                               separators=(",", ":")).encode()
+        digest = hashlib.sha256(canonical).hexdigest()
+        with (patch("xui_fork.api_client.OPENAPI_CANONICAL_SHA256_311", digest),
+              patch("urllib.request.urlopen", return_value=Response(document))):
+            self.assertTrue(client.verify_contract())
         with patch("urllib.request.urlopen", return_value=Response({"other": "spec"})):
-            with self.assertRaisesRegex(ApiError, "digest differs"):
+            with self.assertRaisesRegex(ApiError, "differs"):
                 client.verify_contract()
