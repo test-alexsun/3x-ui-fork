@@ -82,3 +82,11 @@
 Не подтверждены ни один из шестнадцати protocol E2E, включая MASQUE; статическая поддержка в [матрице](COMPATIBILITY_MATRIX.md) не заменяет handshake и импорт подписки. Не выполнены полное покрытие Nginx stream/SNI/REALITY/XHTTP/gRPC, ACME renewal, пользовательский routing, данные PostgreSQL live panel, сохранение UUID/ключей при update и повторный install без diff.
 
 Git: исходный коммит этапа 2 — `cb65406`; код и тесты продолжения — `303a00c`. До выполнения оставшихся criteria 1–16 из запроса статус остаётся **STAGE 2 INCOMPLETE**. Production deployment и `git push` не выполнялись.
+
+## Продолжение 30 октября 2026
+
+Разделы выше сохранены как история предыдущих попыток. Текущее состояние, результаты GitHub Actions и оставшиеся критерии приведены в [CODEX_02_COMPLETION.md](CODEX_02_COMPLETION.md).
+
+Реализован read-only planner для `dry-run`; он выводит блокировки и эффекты без изменений файлов. Чистая установка теперь применяет закреплённый официальный архив v3.11.0 через отдельный staging, SHA-256 и проверку версии, задаёт loopback listener до первого старта и сохраняет root-only ownership state. Добавлены owned SQLite update с offline snapshot и возвратом при ошибке, узкий repair, reversible uninstall и rollback. Режимы backup/restore из прежней версии сохранены. Bash entrypoints больше не падают на ShellCheck SC1007; Nginx syntax test использует непривилегированный listener.
+
+На GitHub в отдельную ветку `codex/stage2-completion` опубликованы commits `0825c83`, `b96a2d4`, `2f0d94c`, `8b81190`, `b9a4975`, `40edeef`; в `main` публикации нет. Последний [CI run 40997065334](https://github.com/test-alexsun/3x-ui-fork/actions/runs/40997065334) завершился SUCCESS для всех трёх jobs после исправления ShellCheck, гонки после systemd start, Nginx syntax test и PostgreSQL backup. Подтверждены clean install, SQLite backup/restore, repair, uninstall/rollback на Ubuntu 24.04; PostgreSQL dump/restore и Nginx syntax test; Debian 13 container preflight. VPS `hl` повторно проверен строго read-only: Debian 13 x86_64, панель и Nginx отсутствуют, TCP 22. Stage 2 остаётся **INCOMPLETE**, поскольку 16 protocol E2E, полный Nginx/SSL и миграция версии с PostgreSQL не завершены.
