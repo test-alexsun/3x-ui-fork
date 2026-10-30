@@ -1,4 +1,4 @@
-"""Real VLESS/VMess WebSocket TLS traffic against a disposable official panel."""
+"""Real web and gRPC TLS traffic against a disposable official panel."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from integration_inbound_reality import (
 )
 
 from xui_fork.api_client import ApiClient, normalize_embedded_json
-from xui_fork.inbound_manager import InboundManager, WebTlsSpec
+from xui_fork.inbound_manager import GrpcTlsSpec, InboundManager, WebTlsSpec
 
 
 def run(*args: str) -> None:
@@ -48,24 +48,32 @@ def certificates(root: Path) -> tuple[Path, Path, Path]:
     return ca_cert, cert, key
 
 
-def client_config(spec: WebTlsSpec, client_id: str, ca_cert: Path, socks_port: int) -> dict:
-    user = ({"id": client_id, "encryption": "none"} if spec.protocol == "vless"
-            else {"id": client_id, "alterId": 0, "security": "auto"})
-    transport = ({"xhttpSettings": {"path": spec.ws_path, "host": spec.server_name,
-                                    "mode": "stream-up"}} if spec.network == "xhttp" else
-                 {"wsSettings": {"path": spec.ws_path,
-                                 "headers": {"Host": spec.server_name}}})
+def client_config(spec: WebTlsSpec | GrpcTlsSpec, client_id: str,
+                  ca_cert: Path, socks_port: int) -> dict:
+    if spec.protocol == "trojan":
+        settings = {"servers": [{"address": "127.0.0.1", "port": spec.port,
+                                 "password": client_id}]}
+        transport = {"grpcSettings": {"serviceName": spec.service_name,
+                                      "authority": spec.server_name, "multiMode": False}}
+    else:
+        user = ({"id": client_id, "encryption": "none"} if spec.protocol == "vless"
+                else {"id": client_id, "alterId": 0, "security": "auto"})
+        settings = {"vnext": [{"address": "127.0.0.1", "port": spec.port,
+                               "users": [user]}]}
+        transport = ({"xhttpSettings": {"path": spec.ws_path, "host": spec.server_name,
+                                        "mode": "stream-up"}} if spec.network == "xhttp" else
+                     {"wsSettings": {"path": spec.ws_path,
+                                     "headers": {"Host": spec.server_name}}})
     return {
         "log": {"loglevel": "debug"},
         "inbounds": [{"tag": "ci-socks", "listen": "127.0.0.1", "port": socks_port,
                       "protocol": "socks", "settings": {"auth": "noauth", "udp": False}}],
         "outbounds": [{"tag": "ci-web", "protocol": spec.protocol,
-                       "settings": {"vnext": [{"address": "127.0.0.1", "port": spec.port,
-                                               "users": [user]}]},
+                       "settings": settings,
                        "streamSettings": {
                            "network": spec.network, "security": "tls", **transport,
                            "tlsSettings": {"serverName": spec.server_name,
-                                           "alpn": (["h2", "http/1.1"] if spec.network == "xhttp"
+                                           "alpn": (["h2", "http/1.1"] if spec.network in {"xhttp", "grpc"}
                                                     else ["http/1.1"]),
                                            "disableSystemRoot": True,
                                            "certificates": [{"certificateFile": str(ca_cert),
@@ -73,16 +81,18 @@ def client_config(spec: WebTlsSpec, client_id: str, ca_cert: Path, socks_port: i
     }
 
 
-def verify_link(link: str, spec: WebTlsSpec, client_id: str) -> None:
-    if spec.protocol == "vless":
+def verify_link(link: str, spec: WebTlsSpec | GrpcTlsSpec, client_id: str) -> None:
+    if spec.protocol in {"vless", "trojan"}:
         parsed = urllib.parse.urlparse(link)
         query = urllib.parse.parse_qs(parsed.query)
-        assert parsed.scheme == "vless" and parsed.username == client_id
+        assert parsed.scheme == spec.protocol and parsed.username == client_id
         assert parsed.hostname == spec.public_address and parsed.port == spec.port
         assert query.get("type") == [spec.network] and query.get("security") == ["tls"]
         assert query.get("sni") == [spec.server_name]
         if spec.network == "ws":
             assert query.get("path") == [spec.ws_path]
+        if spec.network == "grpc":
+            assert query.get("serviceName") == [spec.service_name]
     else:
         assert link.startswith("vmess://")
         payload = link.removeprefix("vmess://")
@@ -105,27 +115,37 @@ def verify_raw_subscription(api: ApiClient, sub_id: str, link: str) -> None:
         assert response.status == 200
     if settings.get("subEncrypt"):
         raw = base64.b64decode(raw, validate=True)
-    assert link.encode() in raw, "RAW subscription omits WebSocket TLS link"
+    assert link.encode() in raw, "RAW subscription omits TLS share link"
 
 
 def exercise(api: ApiClient, manager: InboundManager, xray: Path, ca: Path,
              cert: Path, key: Path, root: Path, profile: str, index: int) -> None:
-    spec = WebTlsSpec(profile, "DE", "ci", 32220 + index, "127.0.0.1",
-                      "ci.example.test", f"/ci-ws-{index}",
-                      f"ci-web-{index}@example.test", cert, key)
-    ensure = manager.ensure_xhttp_tls if spec.network == "xhttp" else manager.ensure_websocket_tls
+    if profile == "Trojan gRPC TLS":
+        spec = GrpcTlsSpec("DE", "ci", 32220 + index, "127.0.0.1",
+                           "ci.example.test", f"ci-grpc-{index}",
+                           f"ci-web-{index}@example.test", cert, key)
+        ensure = manager.ensure_trojan_grpc_tls
+    else:
+        spec = WebTlsSpec(profile, "DE", "ci", 32220 + index, "127.0.0.1",
+                          "ci.example.test", f"/ci-ws-{index}",
+                          f"ci-web-{index}@example.test", cert, key)
+        ensure = (manager.ensure_xhttp_tls if spec.network == "xhttp"
+                  else manager.ensure_websocket_tls)
     first = ensure(spec)
-    assert first["created"], "fresh runner should create WebSocket TLS inbound"
+    assert first["created"], "fresh runner should create TLS inbound"
     try:
         second = ensure(spec)
         assert not second["created"] and second["inbound_id"] == first["inbound_id"]
         detail = api.read(f"inbounds/get/{first['inbound_id']}")
         stream = normalize_embedded_json(detail["streamSettings"])
-        assert stream[spec.network + "Settings"]["path"] == spec.ws_path
+        if spec.network == "grpc":
+            assert stream["grpcSettings"]["serviceName"] == spec.service_name
+        else:
+            assert stream[spec.network + "Settings"]["path"] == spec.ws_path
         assert stream["tlsSettings"]["serverName"] == spec.server_name
         record = api.read(f"clients/get/{spec.client_email}")
         client = record["client"]
-        client_id = client["uuid"]
+        client_id = client["password"] if spec.protocol == "trojan" else client["uuid"]
         links = api.read(f"clients/links/{spec.client_email}")
         assert isinstance(links, list) and len(links) == 1
         verify_link(links[0], spec, client_id)
@@ -189,6 +209,7 @@ def main() -> None:
             exercise(api, manager, xray, ca, cert, key, root, "VLESS WebSocket TLS", 1)
             exercise(api, manager, xray, ca, cert, key, root, "VMess WebSocket TLS", 2)
             exercise(api, manager, xray, ca, cert, key, root, "VLESS XHTTP TLS", 3)
+            exercise(api, manager, xray, ca, cert, key, root, "Trojan gRPC TLS", 4)
         finally:
             httpd.shutdown()
             thread.join(timeout=5)

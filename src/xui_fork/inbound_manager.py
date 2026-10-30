@@ -1,8 +1,4 @@
-"""Version-gated inbound/client orchestration through the official REST API.
-
-The first implemented profile is VLESS REALITY Vision. Other upstream profiles
-remain explicitly unimplemented until their wire payloads and traffic are tested.
-"""
+"""Version-gated inbound/client orchestration through the official REST API."""
 
 from __future__ import annotations
 
@@ -142,6 +138,43 @@ class WebTlsSpec:
         require_certificate(self.cert_file, self.key_file, self.server_name)
 
 
+@dataclass(frozen=True)
+class GrpcTlsSpec:
+    country: str
+    subdomain: str
+    port: int
+    public_address: str
+    server_name: str
+    service_name: str
+    client_email: str
+    cert_file: Path
+    key_file: Path
+
+    profile = "Trojan gRPC TLS"
+    protocol = "trojan"
+    network = "grpc"
+
+    @property
+    def remark(self) -> str:
+        return f"{self.country}-{self.subdomain} | {self.profile}"
+
+    def validate(self, panel_version: str) -> None:
+        validate_profile(self.profile, panel_version)
+        if (not COUNTRY.fullmatch(self.country) or not SUBDOMAIN.fullmatch(self.subdomain)
+                or not 1 <= self.port <= 65535 or not DOMAIN.fullmatch(self.server_name)
+                or not EMAIL.fullmatch(self.client_email)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", self.service_name)):
+            raise ValueError("invalid Trojan gRPC TLS inbound identity or transport")
+        if not DOMAIN.fullmatch(self.public_address):
+            try:
+                ipaddress.ip_address(self.public_address)
+            except ValueError as exc:
+                raise ValueError("public address must be a DNS name or IP address") from exc
+        if not self.cert_file.is_absolute() or not self.key_file.is_absolute():
+            raise ValueError("TLS certificate and key paths must be absolute")
+        require_certificate(self.cert_file, self.key_file, self.server_name)
+
+
 def generate_reality_keypair(xray: Path) -> tuple[str, str]:
     if not xray.is_file():
         raise InboundError("pinned Xray binary is unavailable")
@@ -190,14 +223,23 @@ def _wire_payload(spec: InboundSpec, private_key: str, public_key: str,
     }
 
 
-def _web_tls_payload(spec: WebTlsSpec) -> dict:
-    settings = ({"clients": [], "decryption": "none", "encryption": "none", "fallbacks": []}
-                if spec.protocol == "vless" else {"clients": []})
-    transport = ({"xhttpSettings": {"path": spec.ws_path, "host": spec.server_name,
-                                    "mode": "stream-up"}} if spec.network == "xhttp" else
-                 {"wsSettings": {"acceptProxyProtocol": False, "path": spec.ws_path,
-                                 "host": spec.server_name, "headers": {},
-                                 "heartbeatPeriod": 0}})
+def _web_tls_payload(spec: WebTlsSpec | GrpcTlsSpec) -> dict:
+    if spec.protocol == "vless":
+        settings = {"clients": [], "decryption": "none", "encryption": "none", "fallbacks": []}
+    elif spec.protocol == "trojan":
+        settings = {"clients": [], "fallbacks": []}
+    else:
+        settings = {"clients": []}
+    if spec.network == "grpc":
+        transport = {"grpcSettings": {"serviceName": spec.service_name,
+                                      "authority": spec.server_name, "multiMode": False}}
+    elif spec.network == "xhttp":
+        transport = {"xhttpSettings": {"path": spec.ws_path, "host": spec.server_name,
+                                       "mode": "stream-up"}}
+    else:
+        transport = {"wsSettings": {"acceptProxyProtocol": False, "path": spec.ws_path,
+                                    "host": spec.server_name, "headers": {},
+                                    "heartbeatPeriod": 0}}
     stream = {
         "network": spec.network, "security": "tls", **transport,
         "tlsSettings": {"serverName": spec.server_name, "minVersion": "1.2",
@@ -205,7 +247,7 @@ def _web_tls_payload(spec: WebTlsSpec) -> dict:
                         "certificates": [{"certificateFile": str(spec.cert_file),
                                           "keyFile": str(spec.key_file),
                                           "usage": "encipherment"}],
-                        "alpn": (["h2", "http/1.1"] if spec.network == "xhttp"
+                        "alpn": (["h2", "http/1.1"] if spec.network in {"xhttp", "grpc"}
                                  else ["http/1.1"]), "settings": {"fingerprint": ""}},
     }
     return {
@@ -227,7 +269,7 @@ def _inbounds(api: ApiClient) -> list[dict]:
     return rows
 
 
-def _matching(rows: list[dict], spec: InboundSpec | MixedSpec | WebTlsSpec) -> dict | None:
+def _matching(rows: list[dict], spec: InboundSpec | MixedSpec | WebTlsSpec | GrpcTlsSpec) -> dict | None:
     matches = [row for row in rows if row.get("remark") == spec.remark]
     if len(matches) > 1:
         raise InboundConflict("multiple inbounds share the managed remark")
@@ -289,7 +331,11 @@ class InboundManager:
             raise InboundError("expected VLESS XHTTP TLS profile")
         return self._ensure_web_tls(spec, client_id=client_id)
 
-    def _ensure_web_tls(self, spec: WebTlsSpec, *, client_id: str | None = None) -> dict:
+    def ensure_trojan_grpc_tls(self, spec: GrpcTlsSpec) -> dict:
+        return self._ensure_web_tls(spec)
+
+    def _ensure_web_tls(self, spec: WebTlsSpec | GrpcTlsSpec,
+                        *, client_id: str | None = None) -> dict:
         spec.validate(self.panel_version)
         self.api.verify_contract()
         rows = _inbounds(self.api)
@@ -309,37 +355,45 @@ class InboundManager:
                 created = True
             existing = _matching(_inbounds(self.api), spec)
             if existing is None:
-                raise InboundError("WebSocket TLS write returned success but read-back is missing")
+                raise InboundError("TLS inbound write returned success but read-back is missing")
         inbound_id = existing.get("id")
         if not isinstance(inbound_id, int) or inbound_id < 1 or existing.get("protocol") != spec.protocol:
-            raise InboundConflict("existing WebSocket TLS inbound identity differs")
+            raise InboundConflict("existing TLS inbound identity differs")
         detail = self.api.read(f"inbounds/get/{inbound_id}")
         if not isinstance(detail, dict) or detail.get("port") != spec.port:
-            raise InboundError("WebSocket TLS detail read-back missing")
+            raise InboundError("TLS inbound detail read-back missing")
         stream = normalize_embedded_json(detail.get("streamSettings"))
         transport = stream.get(f"{spec.network}Settings", {}) if isinstance(stream, dict) else {}
         tls = stream.get("tlsSettings", {}) if isinstance(stream, dict) else {}
+        transport_key = "serviceName" if spec.network == "grpc" else "path"
+        transport_value = (spec.service_name if spec.network == "grpc" else spec.ws_path)
         if (not isinstance(stream, dict) or not isinstance(transport, dict)
                 or not isinstance(tls, dict) or stream.get("network") != spec.network
-                or stream.get("security") != "tls" or transport.get("path") != spec.ws_path
+                or stream.get("security") != "tls"
+                or transport.get(transport_key) != transport_value
                 or tls.get("serverName") != spec.server_name):
-            raise InboundConflict("existing WebSocket TLS transport differs")
+            raise InboundConflict("existing TLS transport differs")
         record = _client_record(self.api, spec.client_email)
         if record is not None and client_id is None:
-            client_id = record.get("client", record).get("uuid")
-        client_id = client_id or str(uuid.uuid4())
-        if uuid.UUID(client_id).version != 4:
+            field = "password" if spec.protocol == "trojan" else "uuid"
+            client_id = record.get("client", record).get(field)
+        client_id = client_id or (secrets.token_urlsafe(18) if spec.protocol == "trojan"
+                                  else str(uuid.uuid4()))
+        if spec.protocol != "trojan" and uuid.UUID(client_id).version != 4:
             raise ValueError("client_id must be a UUIDv4")
         if record is None:
-            client = {"id": client_id, "email": spec.client_email,
-                      "subId": secrets.token_hex(8), "enable": True,
+            client = {"email": spec.client_email, "subId": secrets.token_hex(8), "enable": True,
                       "limitIp": 0, "totalGB": 0, "expiryTime": 0,
                       "tgId": 0, "comment": "", "reset": 0,
                       "resetDay": 0, "resetWeekday": 0, "resetMax": 0}
-            if spec.protocol == "vless":
-                client["flow"] = ""
+            if spec.protocol == "trojan":
+                client["password"] = client_id
             else:
-                client.update({"security": "auto", "alterId": 0})
+                client["id"] = client_id
+                if spec.protocol == "vless":
+                    client["flow"] = ""
+                else:
+                    client.update({"security": "auto", "alterId": 0})
             try:
                 self.api.post("clients/add", {"client": client, "inboundIds": [inbound_id]})
             except ApiUncertainError:
@@ -348,17 +402,25 @@ class InboundManager:
                     raise
             record = _client_record(self.api, spec.client_email)
         if record is None:
-            raise InboundError("WebSocket TLS client read-back missing")
-        _verify_client(record, spec.client_email, client_id, inbound_id)
+            raise InboundError("TLS client read-back missing")
+        if spec.protocol == "trojan":
+            observed = record.get("client", record)
+            if (observed.get("email") != spec.client_email
+                    or observed.get("password") != client_id
+                    or inbound_id not in record.get("inboundIds", [])):
+                raise InboundConflict("Trojan client identity or attachment differs")
+        else:
+            _verify_client(record, spec.client_email, client_id, inbound_id)
         detail = self.api.read(f"inbounds/get/{inbound_id}")
         settings = normalize_embedded_json(detail.get("settings"))
         clients = settings.get("clients", []) if isinstance(settings, dict) else []
-        if not any(c.get("email") == spec.client_email and c.get("id") == client_id
+        identity_field = "password" if spec.protocol == "trojan" else "id"
+        if not any(c.get("email") == spec.client_email and c.get(identity_field) == client_id
                    for c in clients if isinstance(c, dict)):
-            raise InboundError("WebSocket TLS backend settings omit client")
+            raise InboundError("TLS backend settings omit client")
         links = self.api.read(f"clients/links/{spec.client_email}")
         if not isinstance(links, list) or not links:
-            raise InboundError("WebSocket TLS client share link missing")
+            raise InboundError("TLS client share link missing")
         return {"inbound_id": inbound_id, "remark": spec.remark,
                 "client_email": spec.client_email, "created": created,
                 "links_verified": True}

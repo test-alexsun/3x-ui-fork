@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from xui_fork.inbound_manager import (
+    GrpcTlsSpec,
     InboundConflict,
     InboundError,
     InboundManager,
@@ -44,7 +45,7 @@ class FakeApi:
         elif path == "clients/add":
             client = payload["client"]
             self.clients[client["email"]] = {
-                "client": {**client, "id": 17, "uuid": client["id"]},
+                "client": {**client, "id": 17, "uuid": client.get("id", "")},
                 "inboundIds": payload["inboundIds"],
             }
             settings = json.loads(self.rows[0]["settings"])
@@ -135,3 +136,24 @@ class InboundManagerTests(unittest.TestCase):
                 network = "xhttp" if profile == "VLESS XHTTP TLS" else "ws"
                 self.assertEqual(stream[network + "Settings"]["path"], "/ci-ws")
                 self.assertEqual(stream["tlsSettings"]["serverName"], "ci.example.test")
+
+    def test_trojan_grpc_tls_password_and_idempotence(self):
+        api = FakeApi()
+        manager = InboundManager(api)
+        grpc = GrpcTlsSpec("DE", "lab", 32126, "127.0.0.1",
+                           "ci.example.test", "ci-grpc", "grpc@example.test",
+                           Path.cwd() / "ci-cert.pem", Path.cwd() / "ci-key.pem")
+        with patch("xui_fork.inbound_manager.require_certificate"):
+            first = manager.ensure_trojan_grpc_tls(grpc)
+            second = manager.ensure_trojan_grpc_tls(grpc)
+        self.assertTrue(first["created"])
+        self.assertFalse(second["created"])
+        self.assertEqual(api.posts, ["inbounds/add", "clients/add"])
+        self.assertEqual(api.rows[0]["protocol"], "trojan")
+        stream = json.loads(api.rows[0]["streamSettings"])
+        self.assertEqual(stream["grpcSettings"]["serviceName"], "ci-grpc")
+        self.assertIn("h2", stream["tlsSettings"]["alpn"])
+        password = api.clients[grpc.client_email]["client"]["password"]
+        self.assertGreaterEqual(len(password), 20)
+        self.assertEqual(json.loads(api.rows[0]["settings"])["clients"][0]["password"],
+                         password)
