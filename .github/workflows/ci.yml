@@ -87,6 +87,8 @@ jobs:
           test -x /tmp/sing-box-1.14.4-linux-amd64-glibc/sing-box
       - name: TUIC v5 native backend, link, TLS, and TCP/UDP sing-box traffic
         run: sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" XUI_RUN_INBOUND_TUIC_E2E=1 python3 tests/integration_inbound_tuic.py
+      - name: MASQUE HTTP3 CONNECT-IP API, TLS, and TCP/UDP Xray traffic
+        run: sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" XUI_RUN_INBOUND_MASQUE_E2E=1 python3 tests/integration_inbound_masque.py
       - name: Exercise owned repair, SQLite backup and restore, uninstall and rollback
         run: |
           sudo rm /usr/bin/x-ui

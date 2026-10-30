@@ -12,6 +12,7 @@ from xui_fork.inbound_manager import (
     InboundError,
     InboundManager,
     InboundSpec,
+    MasqueSpec,
     MixedSpec,
     MlkemTlsSpec,
     RealityXhttpSpec,
@@ -307,3 +308,23 @@ class InboundManagerTests(unittest.TestCase):
         self.assertEqual(settings["server"]["sni"], "ci.example.test")
         self.assertEqual(settings["clients"][0]["uuid"],
                          api.clients[tuic.client_email]["client"]["uuid"])
+
+    def test_masque_connect_ip_tls_and_idempotence(self):
+        api = FakeApi()
+        manager = InboundManager(api)
+        masque = MasqueSpec("DE", "lab", 32133, "127.0.0.1", "ci.example.test",
+                            "masque@example.test", Path.cwd() / "ci-cert.pem",
+                            Path.cwd() / "ci-key.pem")
+        with patch("xui_fork.inbound_manager.require_certificate"):
+            first = manager.ensure_masque(masque)
+            second = manager.ensure_masque(masque)
+        self.assertTrue(first["created"])
+        self.assertFalse(second["created"])
+        self.assertFalse(first["links_verified"])
+        self.assertEqual(api.posts, ["inbounds/add", "clients/add"])
+        self.assertEqual(api.rows[0]["protocol"], "masque")
+        settings = json.loads(api.rows[0]["settings"])
+        stream = json.loads(api.rows[0]["streamSettings"])
+        self.assertEqual(settings["address"], ["10.14.0.1/24"])
+        self.assertEqual(stream["masqueSettings"]["path"], masque.path)
+        self.assertEqual(stream["tlsSettings"]["alpn"], ["h3"])

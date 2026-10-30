@@ -373,6 +373,40 @@ class TuicSpec:
         require_certificate(self.cert_file, self.key_file, self.server_name)
 
 
+@dataclass(frozen=True)
+class MasqueSpec:
+    country: str
+    subdomain: str
+    port: int
+    public_address: str
+    server_name: str
+    client_email: str
+    cert_file: Path
+    key_file: Path
+
+    profile = "MASQUE"
+    path = "/.well-known/masque/ip/{target}/{ipproto}/"
+
+    @property
+    def remark(self) -> str:
+        return f"{self.country}-{self.subdomain} | {self.profile}"
+
+    def validate(self, panel_version: str) -> None:
+        validate_profile(self.profile, panel_version)
+        if (not COUNTRY.fullmatch(self.country) or not SUBDOMAIN.fullmatch(self.subdomain)
+                or not 1 <= self.port <= 65535 or not DOMAIN.fullmatch(self.server_name)
+                or not EMAIL.fullmatch(self.client_email)):
+            raise ValueError("invalid MASQUE inbound identity")
+        if not DOMAIN.fullmatch(self.public_address):
+            try:
+                ipaddress.ip_address(self.public_address)
+            except ValueError as exc:
+                raise ValueError("public address must be a DNS name or IP address") from exc
+        if not self.cert_file.is_absolute() or not self.key_file.is_absolute():
+            raise ValueError("MASQUE certificate and key paths must be absolute")
+        require_certificate(self.cert_file, self.key_file, self.server_name)
+
+
 def _ss2022_key() -> str:
     return base64.b64encode(secrets.token_bytes(32)).decode("ascii")
 
@@ -529,7 +563,7 @@ def _inbounds(api: ApiClient) -> list[dict]:
 def _matching(rows: list[dict], spec: InboundSpec | MixedSpec | WebTlsSpec |
               GrpcTlsSpec | RealityXhttpSpec | MlkemTlsSpec |
               Shadowsocks2022Spec | Hysteria2Spec | WireguardSpec |
-              TuicSpec) -> dict | None:
+              TuicSpec | MasqueSpec) -> dict | None:
     matches = [row for row in rows if row.get("remark") == spec.remark]
     if len(matches) > 1:
         raise InboundConflict("multiple inbounds share the managed remark")
@@ -795,6 +829,97 @@ class InboundManager:
         return {"inbound_id": inbound_id, "remark": spec.remark,
                 "client_email": spec.client_email, "created": created,
                 "links_verified": True}
+
+    def ensure_masque(self, spec: MasqueSpec) -> dict:
+        spec.validate(self.panel_version)
+        self.api.verify_contract()
+        rows = _inbounds(self.api)
+        if any(row.get("port") == spec.port and row.get("remark") != spec.remark
+               for row in rows):
+            raise InboundConflict("inbound port already belongs to another profile")
+        existing = _matching(rows, spec)
+        created = False
+        if existing is None:
+            stream = {"network": "masque", "security": "tls",
+                      "masqueSettings": {"path": spec.path},
+                      "tlsSettings": {"serverName": spec.server_name,
+                                      "minVersion": "1.3", "maxVersion": "1.3",
+                                      "alpn": ["h3"], "rejectUnknownSni": True,
+                                      "certificates": [{"certificateFile": str(spec.cert_file),
+                                                        "keyFile": str(spec.key_file),
+                                                        "usage": "encipherment"}],
+                                      "settings": {"fingerprint": ""}}}
+            payload = {"up": 0, "down": 0, "total": 0, "remark": spec.remark,
+                       "enable": True, "expiryTime": 0, "trafficReset": "never",
+                       "trafficResetDay": 1, "lastTrafficResetTime": 0,
+                       "listen": "127.0.0.1", "port": spec.port, "protocol": "masque",
+                       "settings": json.dumps({"clients": [], "address": ["10.14.0.1/24"],
+                                               "mtu": 1280}, separators=(",", ":")),
+                       "streamSettings": json.dumps(stream, separators=(",", ":")),
+                       "sniffing": json.dumps({"enabled": False}),
+                       "tag": f"in-{spec.port}-masque",
+                       "shareAddrStrategy": "custom", "shareAddr": spec.public_address,
+                       "subSortIndex": 1, "excludeFromSub": False,
+                       "disableFlow": True}
+            try:
+                self.api.post("inbounds/add", payload)
+            except ApiUncertainError:
+                existing = _matching(_inbounds(self.api), spec)
+                if existing is None:
+                    raise
+            else:
+                created = True
+            existing = _matching(_inbounds(self.api), spec)
+            if existing is None:
+                raise InboundError("MASQUE write returned success but read-back missing")
+        inbound_id = existing.get("id")
+        if (not isinstance(inbound_id, int) or inbound_id < 1
+                or existing.get("protocol") != "masque"):
+            raise InboundConflict("existing MASQUE inbound identity differs")
+        detail = self.api.read(f"inbounds/get/{inbound_id}")
+        settings = normalize_embedded_json(detail.get("settings")) if isinstance(detail, dict) else None
+        stream = normalize_embedded_json(detail.get("streamSettings")) if isinstance(detail, dict) else None
+        tls = stream.get("tlsSettings") if isinstance(stream, dict) else None
+        if (not isinstance(detail, dict) or detail.get("port") != spec.port
+                or detail.get("listen") != "127.0.0.1"
+                or not isinstance(settings, dict)
+                or settings.get("address") != ["10.14.0.1/24"]
+                or not isinstance(stream, dict) or stream.get("network") != "masque"
+                or stream.get("security") != "tls"
+                or stream.get("masqueSettings", {}).get("path") != spec.path
+                or not isinstance(tls, dict) or tls.get("serverName") != spec.server_name
+                or tls.get("alpn") != ["h3"]):
+            raise InboundConflict("existing MASQUE tunnel or TLS settings differ")
+        record = _client_record(self.api, spec.client_email)
+        if record is None:
+            client = {"password": secrets.token_urlsafe(18),
+                      "email": spec.client_email, "subId": secrets.token_hex(8),
+                      "enable": True, "limitIp": 0, "totalGB": 0,
+                      "expiryTime": 0, "tgId": 0, "comment": "", "reset": 0}
+            try:
+                self.api.post("clients/add", {"client": client, "inboundIds": [inbound_id]})
+            except ApiUncertainError:
+                record = _client_record(self.api, spec.client_email)
+                if record is None:
+                    raise
+            record = _client_record(self.api, spec.client_email)
+        if not isinstance(record, dict):
+            raise InboundError("MASQUE client read-back missing")
+        observed = record.get("client", record)
+        password = observed.get("password") if isinstance(observed, dict) else None
+        if (not isinstance(password, str) or len(password) < 16
+                or observed.get("email") != spec.client_email
+                or inbound_id not in record.get("inboundIds", [])):
+            raise InboundConflict("MASQUE client identity or attachment differs")
+        detail = self.api.read(f"inbounds/get/{inbound_id}")
+        settings = normalize_embedded_json(detail.get("settings"))
+        if not any(c.get("email") == spec.client_email and c.get("password") == password
+                   for c in settings.get("clients", []) if isinstance(c, dict)):
+            raise InboundError("MASQUE backend settings omit client")
+        # This protocol has no URI share-link exporter in the pinned panel.
+        return {"inbound_id": inbound_id, "remark": spec.remark,
+                "client_email": spec.client_email, "created": created,
+                "links_verified": False}
 
     def ensure_websocket_tls(self, spec: WebTlsSpec, *, client_id: str | None = None) -> dict:
         if spec.network != "ws":
