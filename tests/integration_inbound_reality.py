@@ -17,7 +17,7 @@ import uuid
 from pathlib import Path
 
 from xui_fork.api_client import ApiClient, normalize_embedded_json
-from xui_fork.inbound_manager import InboundManager, InboundSpec
+from xui_fork.inbound_manager import InboundManager, InboundSpec, MixedSpec
 
 
 class Echo(http.server.BaseHTTPRequestHandler):
@@ -162,6 +162,28 @@ def main() -> None:
                         print("Xray client diagnostics:\n" + client_log)
                         print("Panel Xray diagnostics:\n" + safe_log_excerpt(panel_log.stdout))
                         raise AssertionError(f"VLESS REALITY client traffic failed: {last}")
+                    mixed = MixedSpec("DE", "ci", 32124, "ciuser123", "ci-" + uuid.uuid4().hex)
+                    mixed_first = manager.ensure_mixed(mixed)
+                    assert mixed_first["created"]
+                    try:
+                        mixed_second = manager.ensure_mixed(mixed)
+                        assert not mixed_second["created"]
+                        wait_port(mixed.port)
+                        for proxy_args in (
+                            ["--socks5-hostname", f"127.0.0.1:{mixed.port}"],
+                            ["--proxy", f"http://127.0.0.1:{mixed.port}"],
+                        ):
+                            result = subprocess.run(
+                                ["curl", "--silent", "--show-error", "--fail", "--max-time", "10",
+                                 "--noproxy", "", "--proxy-user",
+                                 f"{mixed.username}:{mixed.password}", *proxy_args,
+                                 f"http://{ECHO_ADDRESS}:32180/"],
+                                capture_output=True, text=True, timeout=12)
+                            assert result.returncode == 0 and result.stdout == Echo.marker, (
+                                f"Mixed traffic failed: curl exit={result.returncode}: "
+                                f"{result.stderr.strip()}")
+                    finally:
+                        api.post(f"inbounds/del/{mixed_first['inbound_id']}", {})
                 finally:
                     process.terminate()
                     try:
@@ -174,6 +196,7 @@ def main() -> None:
                                     "dev", "lo"], check=True, capture_output=True, timeout=10)
         print("VLESS REALITY Vision API, client, share link, RAW subscription, "
               "idempotence and traffic: PASS")
+        print("Mixed SOCKS5/HTTP API, account, idempotence and both proxy modes: PASS")
     finally:
         if created:
             api.post(f"clients/del/{spec.client_email}", {})

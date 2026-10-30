@@ -9,6 +9,7 @@ from xui_fork.inbound_manager import (
     InboundError,
     InboundManager,
     InboundSpec,
+    MixedSpec,
     generate_reality_keypair,
 )
 
@@ -94,3 +95,17 @@ class InboundManagerTests(unittest.TestCase):
                         return_value=Mock(stdout=output))):
                 self.assertEqual(generate_reality_keypair(Path("/fixture/xray")),
                                  ("a" * 43, "b" * 43))
+
+    def test_mixed_account_and_idempotence(self):
+        api = FakeApi()
+        manager = InboundManager(api)
+        mixed = MixedSpec("DE", "lab", 32124, "labuser01", "a" * 24)
+        first = manager.ensure_mixed(mixed)
+        second = manager.ensure_mixed(mixed)
+        self.assertTrue(first["created"])
+        self.assertFalse(second["created"])
+        self.assertEqual(api.posts, ["inbounds/add"])
+        self.assertEqual(json.loads(api.rows[0]["settings"])["accounts"][0]["user"],
+                         mixed.username)
+        with self.assertRaises(InboundConflict):
+            manager.ensure_mixed(MixedSpec("DE", "lab", 32124, "labuser01", "b" * 24))

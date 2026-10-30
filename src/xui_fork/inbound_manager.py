@@ -75,6 +75,27 @@ class InboundSpec:
                 raise ValueError("public address must be a DNS name or IP address") from exc
 
 
+@dataclass(frozen=True)
+class MixedSpec:
+    country: str
+    subdomain: str
+    port: int
+    username: str
+    password: str
+
+    @property
+    def remark(self) -> str:
+        return f"{self.country}-{self.subdomain} | Mixed SOCKS5/HTTP"
+
+    def validate(self, panel_version: str) -> None:
+        validate_profile("Mixed SOCKS5/HTTP", panel_version)
+        if (not COUNTRY.fullmatch(self.country) or not SUBDOMAIN.fullmatch(self.subdomain)
+                or not 1 <= self.port <= 65535
+                or not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", self.username)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", self.password)):
+            raise ValueError("invalid Mixed inbound identity or account")
+
+
 def generate_reality_keypair(xray: Path) -> tuple[str, str]:
     if not xray.is_file():
         raise InboundError("pinned Xray binary is unavailable")
@@ -130,7 +151,7 @@ def _inbounds(api: ApiClient) -> list[dict]:
     return rows
 
 
-def _matching(rows: list[dict], spec: InboundSpec) -> dict | None:
+def _matching(rows: list[dict], spec: InboundSpec | MixedSpec) -> dict | None:
     matches = [row for row in rows if row.get("remark") == spec.remark]
     if len(matches) > 1:
         raise InboundConflict("multiple inbounds share the managed remark")
@@ -181,6 +202,54 @@ class InboundManager:
         self.panel_version = panel_version
         arch = "amd64" if platform.machine().lower() in {"x86_64", "amd64"} else "arm64"
         self.xray = xray or Path(f"/usr/local/x-ui/bin/xray-linux-{arch}")
+
+    def ensure_mixed(self, spec: MixedSpec) -> dict:
+        spec.validate(self.panel_version)
+        self.api.verify_contract()
+        rows = _inbounds(self.api)
+        for row in rows:
+            if row.get("port") == spec.port and row.get("remark") != spec.remark:
+                raise InboundConflict("inbound port already belongs to another profile")
+        existing = _matching(rows, spec)
+        created = False
+        if existing is None:
+            payload = {
+                "up": 0, "down": 0, "total": 0, "remark": spec.remark,
+                "enable": True, "expiryTime": 0, "trafficReset": "never",
+                "trafficResetDay": 1, "lastTrafficResetTime": 0,
+                "listen": "127.0.0.1", "port": spec.port, "protocol": "mixed",
+                "settings": json.dumps({"auth": "password", "accounts": [
+                    {"user": spec.username, "pass": spec.password}],
+                    "udp": False, "ip": "127.0.0.1"}, separators=(",", ":")),
+                "streamSettings": json.dumps({"network": "tcp", "security": "none"}),
+                "sniffing": json.dumps({"enabled": False}),
+                "tag": f"in-{spec.port}-tcp", "shareAddrStrategy": "default",
+                "shareAddr": "", "subSortIndex": 1, "excludeFromSub": True,
+                "disableFlow": True,
+            }
+            try:
+                self.api.post("inbounds/add", payload)
+            except ApiUncertainError:
+                existing = _matching(_inbounds(self.api), spec)
+                if existing is None:
+                    raise
+            else:
+                created = True
+            existing = _matching(_inbounds(self.api), spec)
+            if existing is None:
+                raise InboundError("Mixed write returned success but read-back is missing")
+        inbound_id = existing.get("id")
+        if not isinstance(inbound_id, int) or inbound_id < 1 or existing.get("protocol") != "mixed":
+            raise InboundConflict("existing Mixed inbound identity differs")
+        detail = self.api.read(f"inbounds/get/{inbound_id}")
+        if not isinstance(detail, dict) or detail.get("port") != spec.port:
+            raise InboundError("Mixed inbound detail read-back missing")
+        settings = normalize_embedded_json(detail.get("settings"))
+        if (not isinstance(settings, dict) or settings.get("auth") != "password"
+                or {"user": spec.username, "pass": spec.password} not in settings.get("accounts", [])):
+            raise InboundConflict("existing Mixed account differs")
+        return {"inbound_id": inbound_id, "remark": spec.remark, "created": created,
+                "account_verified": True}
 
     def ensure_reality_vision(self, spec: InboundSpec, *, client_id: str | None = None) -> dict:
         spec.validate(self.panel_version)
