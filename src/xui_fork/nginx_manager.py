@@ -17,15 +17,17 @@ class NginxError(RuntimeError):
     pass
 
 
-def render_panel_site(domain: str, cert: Path, key: Path, panel_port: int) -> str:
-    if not DOMAIN_RE.fullmatch(domain) or not 1 <= panel_port <= 65535:
+def render_panel_site(domain: str, cert: Path, key: Path, panel_port: int,
+                      listen_port: int = 443) -> str:
+    if (not DOMAIN_RE.fullmatch(domain) or not 1 <= panel_port <= 65535 or
+            not 1 <= listen_port <= 65535):
         raise ValueError("invalid domain or panel port")
     for path in (cert, key):
         if not path.is_absolute() or any(char in str(path) for char in " \n\r;{}"):
             raise ValueError("certificate paths must be absolute and contain no Nginx syntax")
     return (MARKER + "server {\n"
-            "    listen 443 ssl;\n"
-            "    listen [::]:443 ssl;\n"
+            f"    listen {listen_port} ssl;\n"
+            f"    listen [::]:{listen_port} ssl;\n"
             f"    server_name {domain};\n"
             f"    ssl_certificate {cert};\n"
             f"    ssl_certificate_key {key};\n"

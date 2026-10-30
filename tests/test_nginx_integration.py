@@ -23,7 +23,8 @@ class NginxSyntaxIntegration(unittest.TestCase):
                            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             require_certificate(cert, key, "panel.example.test")
             site = root / "site.conf"
-            site.write_text(render_panel_site("panel.example.test", cert, key, 18080))
+            site.write_text(render_panel_site("panel.example.test", cert, key, 18080,
+                                              listen_port=18443))
             config = root / "nginx.conf"
             config.write_text(f"error_log stderr notice;\npid {root / 'nginx.pid'};\n"
                               f"events {{}}\nhttp {{ access_log {root / 'access.log'}; "
