@@ -10,6 +10,7 @@ from xui_fork.inbound_manager import (
     InboundManager,
     InboundSpec,
     MixedSpec,
+    WebTlsSpec,
     generate_reality_keypair,
 )
 
@@ -110,3 +111,23 @@ class InboundManagerTests(unittest.TestCase):
         self.assertEqual(api.rows[0]["shareAddrStrategy"], "listen")
         with self.assertRaises(InboundConflict):
             manager.ensure_mixed(MixedSpec("DE", "lab", 32124, "labuser01", "b" * 24))
+
+    def test_websocket_tls_payload_and_client_readback(self):
+        for profile, protocol in (("VLESS WebSocket TLS", "vless"),
+                                  ("VMess WebSocket TLS", "vmess")):
+            with self.subTest(profile=profile):
+                api = FakeApi()
+                manager = InboundManager(api)
+                web = WebTlsSpec(profile, "DE", "lab", 32125, "127.0.0.1",
+                                 "ci.example.test", "/ci-ws", "ws@example.test",
+                                 Path.cwd() / "ci-cert.pem", Path.cwd() / "ci-key.pem")
+                with patch("xui_fork.inbound_manager.require_certificate"):
+                    first = manager.ensure_websocket_tls(web)
+                    second = manager.ensure_websocket_tls(web)
+                self.assertTrue(first["created"])
+                self.assertFalse(second["created"])
+                self.assertEqual(api.posts, ["inbounds/add", "clients/add"])
+                self.assertEqual(api.rows[0]["protocol"], protocol)
+                stream = json.loads(api.rows[0]["streamSettings"])
+                self.assertEqual(stream["wsSettings"]["path"], "/ci-ws")
+                self.assertEqual(stream["tlsSettings"]["serverName"], "ci.example.test")
