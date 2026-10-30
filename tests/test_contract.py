@@ -4,7 +4,8 @@ import unittest
 import urllib.error
 from unittest.mock import patch
 
-from xui_fork.api_client import ApiClient, ApiError, ApiUncertainError, normalize_embedded_json
+from xui_fork.api_client import (REQUIRED_OPERATIONS, ApiClient, ApiError,
+                                 ApiUncertainError, normalize_embedded_json)
 from xui_fork.compatibility import profile_supported, version_supported
 
 
@@ -66,4 +67,26 @@ class ContractTests(unittest.TestCase):
             self.assertTrue(client.verify_contract())
         with patch("urllib.request.urlopen", return_value=Response({"other": "spec"})):
             with self.assertRaisesRegex(ApiError, "differs"):
+                client.verify_contract()
+
+    def test_dynamic_web_base_path_accepts_required_contract_only(self):
+        client = ApiClient("https://example.test", "secret")
+        properties = dict.fromkeys(("id", "listen", "port", "protocol", "remark",
+                                    "settings", "streamSettings", "sniffing", "shareAddr",
+                                    "shareAddrStrategy"), {"type": "string"})
+        properties["protocol"] = {"enum": ["vless"]}
+        document = {
+            "openapi": "3.0.3", "info": {"version": "3.x"},
+            "paths": {"/random/panel/api/" + path: {method: {}}
+                      for path, method in REQUIRED_OPERATIONS.items()},
+            "components": {"schemas": {
+                "Inbound": {"properties": properties},
+                "Client": {"properties": dict.fromkeys(("id", "email", "flow", "subId"), {})},
+            }},
+        }
+        with patch("urllib.request.urlopen", return_value=Response(document)):
+            self.assertTrue(client.verify_contract())
+        del document["paths"]["/random/panel/api/clients/add"]
+        with patch("urllib.request.urlopen", return_value=Response(document)):
+            with self.assertRaisesRegex(ApiError, "clients/add"):
                 client.verify_contract()

@@ -30,6 +30,47 @@ WRITE_DYNAMIC = re.compile(r"^(?:inbounds/del/[1-9][0-9]*|clients/del/[A-Za-z0-9
 OPENAPI_SHA256_311 = "e26231888ccd904831f1bc3440d6e6faecaf721c4550daaaa2eb24abac58625f"
 OPENAPI_CANONICAL_SHA256_311 = "e0ca650cd432f8ae7d7ed8d92093bbeae6109a1af2810291c65a055ff6ff722e"
 MAX_RESPONSE = 8 * 1024 * 1024
+REQUIRED_OPERATIONS = {
+    "inbounds/list": "get", "inbounds/get/{id}": "get",
+    "inbounds/add": "post", "inbounds/del/{id}": "post",
+    "clients/list": "get", "clients/get/{email}": "get",
+    "clients/links/{email}": "get", "clients/add": "post",
+    "clients/del/{email}": "post",
+}
+
+
+def _verify_openapi_shape(document: object) -> None:
+    """Check the API surface we use; live specs may contain a random web base path."""
+    if not isinstance(document, dict) or document.get("openapi") != "3.0.3":
+        raise ApiError("panel OpenAPI is not the tested 3.0.3 format")
+    info = document.get("info")
+    if not isinstance(info, dict) or info.get("version") != "3.x":
+        raise ApiError("panel OpenAPI has an unexpected API version")
+    paths = document.get("paths")
+    if not isinstance(paths, dict):
+        raise ApiError("panel OpenAPI has no path catalog")
+    for suffix, method in REQUIRED_OPERATIONS.items():
+        matches = [operations for path, operations in paths.items()
+                   if path.endswith("/panel/api/" + suffix)]
+        if len(matches) != 1 or not isinstance(matches[0], dict) or method not in matches[0]:
+            raise ApiError(f"panel OpenAPI lacks {method.upper()} {suffix}")
+    components = document.get("components", {})
+    schemas = components.get("schemas", {}) if isinstance(components, dict) else {}
+    if not isinstance(schemas, dict):
+        raise ApiError("panel OpenAPI has no schemas")
+    inbound = schemas.get("Inbound", {})
+    properties = inbound.get("properties", {}) if isinstance(inbound, dict) else {}
+    required = {"id", "listen", "port", "protocol", "remark", "settings",
+                "streamSettings", "sniffing", "shareAddr", "shareAddrStrategy"}
+    if not isinstance(properties, dict) or not required.issubset(properties):
+        raise ApiError("panel OpenAPI inbound schema changed")
+    protocol = properties["protocol"]
+    if not isinstance(protocol, dict) or "vless" not in protocol.get("enum", []):
+        raise ApiError("panel OpenAPI no longer exposes VLESS inbounds")
+    client = schemas.get("Client", {})
+    fields = client.get("properties", {}) if isinstance(client, dict) else {}
+    if not isinstance(fields, dict) or not {"id", "email", "flow", "subId"}.issubset(fields):
+        raise ApiError("panel OpenAPI client schema changed")
 
 
 class ApiClient:
@@ -96,6 +137,7 @@ class ApiClient:
         actual = hashlib.sha256(body).hexdigest()
         if actual == OPENAPI_SHA256_311:
             return True
+        document = None
         try:
             document = json.loads(body)
             canonical = json.dumps(document, ensure_ascii=False, sort_keys=True,
@@ -106,8 +148,12 @@ class ApiClient:
             canonical_hash = "invalid"
             kind = "non-JSON"
         if canonical_hash != OPENAPI_CANONICAL_SHA256_311:
-            raise ApiError(f"panel OpenAPI differs from tested 3.11.0 contract "
-                           f"(raw SHA-256 {actual}; canonical {canonical_hash}; response {kind})")
+            try:
+                _verify_openapi_shape(document)
+            except ApiError as exc:
+                raise ApiError(f"panel OpenAPI differs from tested 3.11.0 contract "
+                               f"(raw SHA-256 {actual}; canonical {canonical_hash}; "
+                               f"response {kind}): {exc}") from exc
         return True
 
     def post(self, path: str, payload: dict) -> object:
