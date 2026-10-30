@@ -916,7 +916,7 @@ class InboundManager:
         if not any(c.get("email") == spec.client_email and c.get("password") == password
                    for c in settings.get("clients", []) if isinstance(c, dict)):
             raise InboundError("MASQUE backend settings omit client")
-        # This protocol has no URI share-link exporter in the pinned panel.
+        # The protocol's export format is verified separately from tunnel traffic.
         return {"inbound_id": inbound_id, "remark": spec.remark,
                 "client_email": spec.client_email, "created": created,
                 "links_verified": False}

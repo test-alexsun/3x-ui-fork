@@ -24,6 +24,11 @@ Branch: `codex/stage2-completion`. Preserve completed work; never push to `main`
 - Commit `be6ddf9` adds a native TUIC v5 inbound/client adapter and a disposable E2E with sing-box v1.14.4 (official release asset SHA-256 `231e57c18378f780a08de832844a1ca9716e17a7bcf82964b350844d243c03ac`). The test checks TLS CA/SNI, official API read-back, direct share link, idempotence, native UDP listener, TCP and SOCKS5 UDP response traffic. Subscription is reported separately because of the pinned upstream regression.
 - [CI 41095436539](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41095436539) passed all jobs. Log: `TUIC v5 native API, link, verified TLS, TCP and UDP traffic PASS` and `TUIC v5 subscription: subLinks=True, RAW=False`. Local 41 tests passed with one Nginx skip; Python compile and `git diff --check` passed.
 
+## Active MASQUE checkpoint
+
+- Group D AmneziaWG 3.1 needs a compatible native client for data-path E2E; MTProto forwards to Telegram and requires an authentic protocol client/service. These are pending, so independent MASQUE proceeds first under the original staged-work rule.
+- Commit `a3de503` adds official MASQUE CONNECT-IP inbound/client settings and an Xray HTTP/3/TLS client E2E with TCP and SOCKS5 UDP echoes. [CI 41096545372](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41096545372) failed before traffic because the test assumed `clients/links` returned an empty list. The pinned panel returned a nonempty value. The test now records only link schemes and proceeds to traffic; retry pending. Do not mark MASQUE PASS until all jobs and TCP/UDP checks succeed. Local 42 tests passed with one Windows Nginx skip; compile and diff checks passed.
+
 ## Current unfinished work
 
 - Group C Shadowsocks 2022 is complete after readiness hardening. Initial CI [41038697457](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41038697457) failed TCP, retry [41089504112](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41089504112) passed, and hardened run [41090071019](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41090071019) passed all jobs. The test waits for the generated Xray config to contain the attached client before real TCP/UDP traffic.

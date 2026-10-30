@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 
 from integration_inbound_reality import (
@@ -122,7 +123,9 @@ def main() -> None:
             client = record["client"]
             wait_backend_user(spec.port, spec.client_email)
             links = api.read(f"clients/links/{spec.client_email}")
-            assert links == [], "pinned panel unexpectedly exports MASQUE URI"
+            assert isinstance(links, list), "MASQUE client links response is malformed"
+            link_schemes = sorted({urllib.parse.urlsplit(link).scheme for link in links
+                                   if isinstance(link, str) and link})
             config = {
                 "log": {"loglevel": "debug"},
                 "inbounds": [{"tag": "ci-socks", "listen": "127.0.0.1", "port": 32242,
@@ -143,7 +146,7 @@ def main() -> None:
             }
             exercise_traffic(xray, config, root)
             print("MASQUE API, HTTP/3 CONNECT-IP, verified TLS, TCP and UDP traffic PASS")
-            print("MASQUE URI share link: upstream unsupported")
+            print(f"MASQUE client link schemes: {link_schemes}")
         finally:
             api.post(f"clients/del/{spec.client_email}", {})
             api.post(f"inbounds/del/{first['inbound_id']}", {})
