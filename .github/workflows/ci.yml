@@ -73,6 +73,8 @@ jobs:
         run: sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" XUI_RUN_INBOUND_MLKEM_E2E=1 python3 tests/integration_inbound_mlkem.py
       - name: Shadowsocks 2022 API, subscription, and TCP/UDP Xray traffic
         run: sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" XUI_RUN_INBOUND_SS2022_E2E=1 python3 tests/integration_inbound_shadowsocks2022.py
+      - name: Hysteria2 API, subscription, and TCP/UDP Xray traffic
+        run: sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" XUI_RUN_INBOUND_HYSTERIA2_E2E=1 python3 tests/integration_inbound_hysteria2.py
       - name: Exercise owned repair, SQLite backup and restore, uninstall and rollback
         run: |
           sudo rm /usr/bin/x-ui

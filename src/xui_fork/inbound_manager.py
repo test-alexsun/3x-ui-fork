@@ -272,6 +272,39 @@ class Shadowsocks2022Spec:
                 raise ValueError("public address must be a DNS name or IP address") from exc
 
 
+@dataclass(frozen=True)
+class Hysteria2Spec:
+    country: str
+    subdomain: str
+    port: int
+    public_address: str
+    server_name: str
+    client_email: str
+    cert_file: Path
+    key_file: Path
+
+    profile = "Hysteria2"
+
+    @property
+    def remark(self) -> str:
+        return f"{self.country}-{self.subdomain} | {self.profile}"
+
+    def validate(self, panel_version: str) -> None:
+        validate_profile(self.profile, panel_version)
+        if (not COUNTRY.fullmatch(self.country) or not SUBDOMAIN.fullmatch(self.subdomain)
+                or not 1 <= self.port <= 65535 or not DOMAIN.fullmatch(self.server_name)
+                or not EMAIL.fullmatch(self.client_email)):
+            raise ValueError("invalid Hysteria2 inbound identity")
+        if not DOMAIN.fullmatch(self.public_address):
+            try:
+                ipaddress.ip_address(self.public_address)
+            except ValueError as exc:
+                raise ValueError("public address must be a DNS name or IP address") from exc
+        if not self.cert_file.is_absolute() or not self.key_file.is_absolute():
+            raise ValueError("TLS certificate and key paths must be absolute")
+        require_certificate(self.cert_file, self.key_file, self.server_name)
+
+
 def _ss2022_key() -> str:
     return base64.b64encode(secrets.token_bytes(32)).decode("ascii")
 
@@ -395,7 +428,7 @@ def _inbounds(api: ApiClient) -> list[dict]:
 
 def _matching(rows: list[dict], spec: InboundSpec | MixedSpec | WebTlsSpec |
               GrpcTlsSpec | RealityXhttpSpec | MlkemTlsSpec |
-              Shadowsocks2022Spec) -> dict | None:
+              Shadowsocks2022Spec | Hysteria2Spec) -> dict | None:
     matches = [row for row in rows if row.get("remark") == spec.remark]
     if len(matches) > 1:
         raise InboundConflict("multiple inbounds share the managed remark")
@@ -631,6 +664,101 @@ class InboundManager:
             raise InboundConflict("existing Mixed account differs")
         return {"inbound_id": inbound_id, "remark": spec.remark, "created": created,
                 "account_verified": True}
+
+    def ensure_hysteria2(self, spec: Hysteria2Spec) -> dict:
+        spec.validate(self.panel_version)
+        self.api.verify_contract()
+        rows = _inbounds(self.api)
+        for row in rows:
+            if row.get("port") == spec.port and row.get("remark") != spec.remark:
+                raise InboundConflict("inbound port already belongs to another profile")
+        existing = _matching(rows, spec)
+        created = False
+        if existing is None:
+            stream = {
+                "network": "hysteria", "security": "tls",
+                "hysteriaSettings": {"version": 2, "udpIdleTimeout": 60},
+                "tlsSettings": {"serverName": spec.server_name,
+                                "minVersion": "1.3", "maxVersion": "1.3",
+                                "alpn": ["h3"], "rejectUnknownSni": True,
+                                "certificates": [{"certificateFile": str(spec.cert_file),
+                                                  "keyFile": str(spec.key_file),
+                                                  "usage": "encipherment"}],
+                                "settings": {"fingerprint": ""}},
+            }
+            payload = {"up": 0, "down": 0, "total": 0, "remark": spec.remark,
+                       "enable": True, "expiryTime": 0, "trafficReset": "never",
+                       "trafficResetDay": 1, "lastTrafficResetTime": 0,
+                       "listen": "127.0.0.1", "port": spec.port,
+                       "protocol": "hysteria",
+                       "settings": json.dumps({"version": 2, "clients": []}),
+                       "streamSettings": json.dumps(stream, separators=(",", ":")),
+                       "sniffing": json.dumps({"enabled": False}),
+                       "tag": f"in-{spec.port}-hysteria",
+                       "shareAddrStrategy": "custom", "shareAddr": spec.public_address,
+                       "subSortIndex": 1, "excludeFromSub": False,
+                       "disableFlow": True}
+            try:
+                self.api.post("inbounds/add", payload)
+            except ApiUncertainError:
+                existing = _matching(_inbounds(self.api), spec)
+                if existing is None:
+                    raise
+            else:
+                created = True
+            existing = _matching(_inbounds(self.api), spec)
+            if existing is None:
+                raise InboundError("Hysteria2 write returned success but read-back missing")
+        inbound_id = existing.get("id")
+        if (not isinstance(inbound_id, int) or inbound_id < 1
+                or existing.get("protocol") != "hysteria"):
+            raise InboundConflict("existing Hysteria2 inbound identity differs")
+        detail = self.api.read(f"inbounds/get/{inbound_id}")
+        settings = normalize_embedded_json(detail.get("settings")) if isinstance(detail, dict) else None
+        stream = normalize_embedded_json(detail.get("streamSettings")) if isinstance(detail, dict) else None
+        transport = stream.get("hysteriaSettings", {}) if isinstance(stream, dict) else {}
+        tls = stream.get("tlsSettings", {}) if isinstance(stream, dict) else {}
+        if (not isinstance(detail, dict) or detail.get("port") != spec.port
+                or not isinstance(settings, dict) or settings.get("version") != 2
+                or not isinstance(stream, dict) or not isinstance(transport, dict)
+                or not isinstance(tls, dict) or stream.get("network") != "hysteria"
+                or stream.get("security") != "tls" or transport.get("version") != 2
+                or tls.get("serverName") != spec.server_name
+                or "h3" not in tls.get("alpn", [])):
+            raise InboundConflict("existing Hysteria2 transport differs")
+        record = _client_record(self.api, spec.client_email)
+        if record is None:
+            client = {"auth": secrets.token_urlsafe(18),
+                      "email": spec.client_email, "subId": secrets.token_hex(8),
+                      "enable": True, "limitIp": 0, "totalGB": 0,
+                      "expiryTime": 0, "tgId": 0, "comment": "",
+                      "reset": 0, "resetDay": 0, "resetWeekday": 0, "resetMax": 0}
+            try:
+                self.api.post("clients/add", {"client": client, "inboundIds": [inbound_id]})
+            except ApiUncertainError:
+                record = _client_record(self.api, spec.client_email)
+                if record is None:
+                    raise
+            record = _client_record(self.api, spec.client_email)
+        if not isinstance(record, dict):
+            raise InboundError("Hysteria2 client read-back missing")
+        observed = record.get("client", record)
+        auth = observed.get("auth") if isinstance(observed, dict) else None
+        if (not isinstance(auth, str) or len(auth) < 16
+                or observed.get("email") != spec.client_email
+                or inbound_id not in record.get("inboundIds", [])):
+            raise InboundConflict("Hysteria2 client identity or attachment differs")
+        detail = self.api.read(f"inbounds/get/{inbound_id}")
+        settings = normalize_embedded_json(detail.get("settings"))
+        if not any(c.get("email") == spec.client_email and c.get("auth") == auth
+                   for c in settings.get("clients", []) if isinstance(c, dict)):
+            raise InboundError("Hysteria2 backend settings omit client")
+        links = self.api.read(f"clients/links/{spec.client_email}")
+        if not isinstance(links, list) or not links:
+            raise InboundError("Hysteria2 share link missing")
+        return {"inbound_id": inbound_id, "remark": spec.remark,
+                "client_email": spec.client_email, "created": created,
+                "links_verified": True}
 
     def ensure_shadowsocks_2022(self, spec: Shadowsocks2022Spec) -> dict:
         spec.validate(self.panel_version)

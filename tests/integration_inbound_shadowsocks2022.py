@@ -37,7 +37,7 @@ def udp_echo(server: socket.socket, stop: threading.Event) -> None:
         server.sendto(Echo.marker.encode(), address)
 
 
-def verify_udp(socks_port: int, echo_port: int) -> None:
+def verify_udp(socks_port: int, echo_port: int, profile: str = "Shadowsocks 2022") -> None:
     def receive_exact(connection: socket.socket, count: int) -> bytes:
         data = b""
         while len(data) < count:
@@ -67,7 +67,7 @@ def verify_udp(socks_port: int, echo_port: int) -> None:
                     continue
                 assert received.endswith(Echo.marker.encode()), "UDP echo marker mismatch"
                 return
-        raise AssertionError("Shadowsocks 2022 UDP traffic did not reach echo")
+        raise AssertionError(f"{profile} UDP traffic did not reach echo")
 
 
 def wait_backend_config(inbound_port: int, server_key: str, client_key: str) -> None:

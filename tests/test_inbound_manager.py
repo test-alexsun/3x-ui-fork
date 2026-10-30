@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 from xui_fork.inbound_manager import (
     GrpcTlsSpec,
+    Hysteria2Spec,
     InboundConflict,
     InboundError,
     InboundManager,
@@ -222,3 +223,24 @@ class InboundManagerTests(unittest.TestCase):
         self.assertEqual(detail["network"], "tcp,udp")
         self.assertEqual(json.loads(api.rows[0]["settings"])["password"], server_key)
         self.assertEqual(api.clients[ss.client_email]["client"]["password"], client_key)
+
+    def test_hysteria2_tls_quic_auth_and_idempotence(self):
+        api = FakeApi()
+        manager = InboundManager(api)
+        hy = Hysteria2Spec("DE", "lab", 32130, "127.0.0.1",
+                           "ci.example.test", "hy@example.test",
+                           Path.cwd() / "ci-cert.pem", Path.cwd() / "ci-key.pem")
+        with patch("xui_fork.inbound_manager.require_certificate"):
+            first = manager.ensure_hysteria2(hy)
+            second = manager.ensure_hysteria2(hy)
+        self.assertTrue(first["created"])
+        self.assertFalse(second["created"])
+        self.assertEqual(api.posts, ["inbounds/add", "clients/add"])
+        stream = json.loads(api.rows[0]["streamSettings"])
+        self.assertEqual(stream["network"], "hysteria")
+        self.assertEqual(stream["hysteriaSettings"]["version"], 2)
+        self.assertEqual(stream["tlsSettings"]["alpn"], ["h3"])
+        settings = json.loads(api.rows[0]["settings"])
+        self.assertEqual(settings["version"], 2)
+        self.assertEqual(settings["clients"][0]["auth"],
+                         api.clients[hy.client_email]["client"]["auth"])
