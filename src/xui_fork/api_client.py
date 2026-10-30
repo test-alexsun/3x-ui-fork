@@ -91,9 +91,16 @@ class ApiClient:
         return data.get("obj")
 
     def verify_contract(self) -> bool:
-        actual = hashlib.sha256(self._request("GET", "openapi.json")).hexdigest()
+        body = self._request("GET", "openapi.json")
+        actual = hashlib.sha256(body).hexdigest()
         if actual != OPENAPI_SHA256_311:
-            raise ApiError("panel OpenAPI digest differs from tested 3.11.0 contract")
+            try:
+                document = json.loads(body)
+                kind = document.get("openapi", "other JSON") if isinstance(document, dict) else "JSON array"
+            except ValueError:
+                kind = "non-JSON"
+            raise ApiError(f"panel OpenAPI digest differs from tested 3.11.0 contract "
+                           f"(actual SHA-256 {actual}; response {kind})")
         return True
 
     def post(self, path: str, payload: dict) -> object:
