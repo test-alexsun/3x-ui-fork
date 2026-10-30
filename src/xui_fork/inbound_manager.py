@@ -305,6 +305,41 @@ class Hysteria2Spec:
         require_certificate(self.cert_file, self.key_file, self.server_name)
 
 
+@dataclass(frozen=True)
+class WireguardSpec:
+    country: str
+    subdomain: str
+    port: int
+    public_address: str
+    client_email: str
+    subnet: str = "10.66.0.0/24"
+    mtu: int = 1420
+
+    profile = "WireGuard"
+
+    @property
+    def remark(self) -> str:
+        return f"{self.country}-{self.subdomain} | {self.profile}"
+
+    def validate(self, panel_version: str) -> None:
+        validate_profile(self.profile, panel_version)
+        if (not COUNTRY.fullmatch(self.country) or not SUBDOMAIN.fullmatch(self.subdomain)
+                or not 1 <= self.port <= 65535 or not EMAIL.fullmatch(self.client_email)
+                or not 576 <= self.mtu <= 1420):
+            raise ValueError("invalid WireGuard inbound identity or MTU")
+        try:
+            network = ipaddress.ip_network(self.subnet, strict=True)
+        except ValueError as exc:
+            raise ValueError("invalid WireGuard subnet") from exc
+        if network.version != 4 or network.prefixlen > 29 or not network.is_private:
+            raise ValueError("WireGuard subnet must be a private IPv4 network with room for peers")
+        if not DOMAIN.fullmatch(self.public_address):
+            try:
+                ipaddress.ip_address(self.public_address)
+            except ValueError as exc:
+                raise ValueError("public address must be a DNS name or IP address") from exc
+
+
 def _ss2022_key() -> str:
     return base64.b64encode(secrets.token_bytes(32)).decode("ascii")
 
@@ -328,6 +363,38 @@ def generate_reality_keypair(xray: Path) -> tuple[str, str]:
                                          for x in (private, public)):
         raise InboundError("Xray returned no usable REALITY X25519 keypair")
     return private, public
+
+
+def generate_wireguard_keypair(xray: Path) -> tuple[str, str]:
+    if not xray.is_file():
+        raise InboundError("pinned Xray binary is unavailable")
+    result = subprocess.run([str(xray), "wg"], check=True, text=True,
+                            capture_output=True, timeout=20)
+    values = {}
+    for line in result.stdout.splitlines():
+        if ":" in line:
+            key, value = line.split(":", 1)
+            label = key.strip().lower().replace(" ", "")
+            if label in {"privatekey", "publickey", "password", "password(publickey)"}:
+                values[label] = value.strip()
+    private = values.get("privatekey")
+    public = (values.get("publickey") or values.get("password") or
+              values.get("password(publickey)"))
+    try:
+        valid = all(len(base64.b64decode(key, validate=True)) == 32
+                    for key in (private, public))
+    except (TypeError, ValueError):
+        valid = False
+    if not valid:
+        raise InboundError("Xray returned no usable WireGuard keypair")
+    return private, public
+
+
+def _valid_wireguard_key(value: object) -> bool:
+    try:
+        return len(base64.b64decode(value, validate=True)) == 32
+    except (TypeError, ValueError):
+        return False
 
 
 def _wire_payload(spec: InboundSpec, private_key: str, public_key: str,
@@ -428,7 +495,7 @@ def _inbounds(api: ApiClient) -> list[dict]:
 
 def _matching(rows: list[dict], spec: InboundSpec | MixedSpec | WebTlsSpec |
               GrpcTlsSpec | RealityXhttpSpec | MlkemTlsSpec |
-              Shadowsocks2022Spec | Hysteria2Spec) -> dict | None:
+              Shadowsocks2022Spec | Hysteria2Spec | WireguardSpec) -> dict | None:
     matches = [row for row in rows if row.get("remark") == spec.remark]
     if len(matches) > 1:
         raise InboundConflict("multiple inbounds share the managed remark")
@@ -495,6 +562,104 @@ class InboundManager:
         self.panel_version = panel_version
         arch = "amd64" if platform.machine().lower() in {"x86_64", "amd64"} else "arm64"
         self.xray = xray or Path(f"/usr/local/x-ui/bin/xray-linux-{arch}")
+
+    def ensure_wireguard(self, spec: WireguardSpec) -> dict:
+        spec.validate(self.panel_version)
+        self.api.verify_contract()
+        rows = _inbounds(self.api)
+        if any(row.get("port") == spec.port and row.get("remark") != spec.remark
+               for row in rows):
+            raise InboundConflict("inbound port already belongs to another profile")
+        existing = _matching(rows, spec)
+        created = False
+        if existing is None:
+            server_private, _ = generate_wireguard_keypair(self.xray)
+            subnet = ipaddress.ip_network(spec.subnet)
+            settings = {"mtu": spec.mtu, "secretKey": server_private, "peers": [],
+                        "clients": [], "noKernelTun": True,
+                        "subnetIp": str(subnet.network_address),
+                        "subnetCidr": subnet.prefixlen}
+            payload = {"up": 0, "down": 0, "total": 0, "remark": spec.remark,
+                       "enable": True, "expiryTime": 0, "trafficReset": "never",
+                       "trafficResetDay": 1, "lastTrafficResetTime": 0,
+                       "listen": "127.0.0.1", "port": spec.port,
+                       "protocol": "wireguard",
+                       "settings": json.dumps(settings, separators=(",", ":")),
+                       "streamSettings": json.dumps({"network": "tcp", "security": "none"}),
+                       "sniffing": json.dumps({"enabled": False}),
+                       "tag": f"in-{spec.port}-wireguard", "shareAddrStrategy": "custom",
+                       "shareAddr": spec.public_address, "subSortIndex": 1,
+                       "excludeFromSub": False, "disableFlow": True}
+            try:
+                self.api.post("inbounds/add", payload)
+            except ApiUncertainError:
+                existing = _matching(_inbounds(self.api), spec)
+                if existing is None:
+                    raise
+            else:
+                created = True
+            existing = _matching(_inbounds(self.api), spec)
+            if existing is None:
+                raise InboundError("WireGuard write returned success but read-back missing")
+        inbound_id = existing.get("id")
+        if (not isinstance(inbound_id, int) or inbound_id < 1
+                or existing.get("protocol") != "wireguard"):
+            raise InboundConflict("existing WireGuard inbound identity differs")
+        detail = self.api.read(f"inbounds/get/{inbound_id}")
+        settings = normalize_embedded_json(detail.get("settings")) if isinstance(detail, dict) else None
+        if (not isinstance(detail, dict) or detail.get("port") != spec.port
+                or detail.get("listen") != "127.0.0.1"
+                or not isinstance(settings, dict) or settings.get("mtu") != spec.mtu
+                or not _valid_wireguard_key(settings.get("secretKey"))
+                or settings.get("subnetIp") != str(ipaddress.ip_network(spec.subnet).network_address)
+                or settings.get("subnetCidr") != ipaddress.ip_network(spec.subnet).prefixlen):
+            raise InboundConflict("existing WireGuard settings differ")
+        record = _client_record(self.api, spec.client_email)
+        if record is None:
+            # The official panel allocates a unique tunnel IP and generates the
+            # client keypair when these fields are left empty.
+            client = {"privateKey": "", "publicKey": "", "allowedIPs": [],
+                      "email": spec.client_email, "subId": secrets.token_hex(8),
+                      "enable": True, "limitIp": 0, "totalGB": 0,
+                      "expiryTime": 0, "tgId": 0, "comment": "", "reset": 0}
+            try:
+                self.api.post("clients/add", {"client": client, "inboundIds": [inbound_id]})
+            except ApiUncertainError:
+                record = _client_record(self.api, spec.client_email)
+                if record is None:
+                    raise
+            record = _client_record(self.api, spec.client_email)
+        if not isinstance(record, dict):
+            raise InboundError("WireGuard client read-back missing")
+        observed = record.get("client", record)
+        if not isinstance(observed, dict):
+            raise InboundError("WireGuard client read-back malformed")
+        addresses = observed.get("allowedIPs")
+        subnet = ipaddress.ip_network(spec.subnet)
+        try:
+            valid_address = (isinstance(addresses, list) and len(addresses) == 1
+                             and ipaddress.ip_network(addresses[0], strict=False).prefixlen == 32
+                             and ipaddress.ip_address(addresses[0].split("/")[0]) in subnet)
+        except (TypeError, ValueError):
+            valid_address = False
+        if (observed.get("email") != spec.client_email
+                or not _valid_wireguard_key(observed.get("privateKey"))
+                or not _valid_wireguard_key(observed.get("publicKey"))
+                or not valid_address or inbound_id not in record.get("inboundIds", [])):
+            raise InboundConflict("WireGuard client key, tunnel address or attachment differs")
+        detail = self.api.read(f"inbounds/get/{inbound_id}")
+        settings = normalize_embedded_json(detail.get("settings"))
+        if not any(c.get("email") == spec.client_email
+                   and c.get("publicKey") == observed["publicKey"]
+                   and c.get("allowedIPs") == addresses
+                   for c in settings.get("clients", []) if isinstance(c, dict)):
+            raise InboundError("WireGuard backend settings omit client")
+        links = self.api.read(f"clients/links/{spec.client_email}")
+        if not isinstance(links, list) or not links:
+            raise InboundError("WireGuard share link missing")
+        return {"inbound_id": inbound_id, "remark": spec.remark,
+                "client_email": spec.client_email, "created": created,
+                "links_verified": True}
 
     def ensure_websocket_tls(self, spec: WebTlsSpec, *, client_id: str | None = None) -> dict:
         if spec.network != "ws":

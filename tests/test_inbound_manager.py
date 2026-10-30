@@ -1,3 +1,4 @@
+import base64
 import json
 import unittest
 import uuid
@@ -16,7 +17,9 @@ from xui_fork.inbound_manager import (
     RealityXhttpSpec,
     Shadowsocks2022Spec,
     WebTlsSpec,
+    WireguardSpec,
     generate_reality_keypair,
+    generate_wireguard_keypair,
 )
 
 
@@ -52,6 +55,10 @@ class FakeApi:
             self.rows.append({**payload, "id": 9})
         elif path == "clients/add":
             client = payload["client"]
+            if self.rows[0]["protocol"] == "wireguard":
+                client = {**client, "privateKey": base64.b64encode(b"c" * 32).decode(),
+                          "publicKey": base64.b64encode(b"d" * 32).decode(),
+                          "allowedIPs": ["10.66.0.2/32"]}
             self.clients[client["email"]] = {
                 "client": {**client, "id": 17, "uuid": client.get("id", "")},
                 "inboundIds": payload["inboundIds"],
@@ -244,3 +251,35 @@ class InboundManagerTests(unittest.TestCase):
         self.assertEqual(settings["version"], 2)
         self.assertEqual(settings["clients"][0]["auth"],
                          api.clients[hy.client_email]["client"]["auth"])
+
+    def test_wireguard_panel_allocated_peer_and_idempotence(self):
+        api = FakeApi()
+        manager = InboundManager(api, xray=Path("/fixture/xray"))
+        wg = WireguardSpec("DE", "lab", 32131, "127.0.0.1", "wg@example.test")
+        with patch("xui_fork.inbound_manager.generate_wireguard_keypair",
+                   return_value=(base64.b64encode(b"a" * 32).decode(),
+                                 base64.b64encode(b"b" * 32).decode())):
+            first = manager.ensure_wireguard(wg)
+            second = manager.ensure_wireguard(wg)
+        self.assertTrue(first["created"])
+        self.assertFalse(second["created"])
+        self.assertEqual(api.posts, ["inbounds/add", "clients/add"])
+        settings = json.loads(api.rows[0]["settings"])
+        self.assertEqual(settings["subnetIp"], "10.66.0.0")
+        self.assertEqual(settings["subnetCidr"], 24)
+        self.assertTrue(settings["noKernelTun"])
+        self.assertEqual(settings["clients"][0]["allowedIPs"], ["10.66.0.2/32"])
+
+    def test_wireguard_key_parser_rejects_bad_output(self):
+        private = base64.b64encode(b"a" * 32).decode()
+        public = base64.b64encode(b"b" * 32).decode()
+        with (patch.object(Path, "is_file", return_value=True),
+              patch("xui_fork.inbound_manager.subprocess.run",
+                    return_value=Mock(stdout=f"PrivateKey: {private}\nPassword (PublicKey): {public}\n"))):
+            self.assertEqual(generate_wireguard_keypair(Path("/fixture/xray")),
+                             (private, public))
+        with (patch.object(Path, "is_file", return_value=True),
+              patch("xui_fork.inbound_manager.subprocess.run",
+                    return_value=Mock(stdout="PrivateKey: invalid\nPublicKey: invalid\n"))):
+            with self.assertRaises(InboundError):
+                generate_wireguard_keypair(Path("/fixture/xray"))
