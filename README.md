@@ -40,6 +40,6 @@ export XUI_API_TOKEN='existing-token'
 bash bootstrap.sh status --api
 ```
 
-The API adapter permits remote bearer tokens only over HTTPS and reports counts without client secrets. Nginx include rendering, certificate validation, and profile compatibility checks exist as library functions. The 16 protocol creation workflows, ACME, Nginx stream routing, and live API validation are not complete.
+The API adapter permits remote bearer tokens only over HTTPS and reports counts without client secrets. The inbound library currently creates VLESS REALITY Vision and Mixed SOCKS5/HTTP through the official API; both have traffic tests on a disposable runner. The other 14 protocol workflows, ACME, Nginx stream routing, and cross-version migration are not complete.
 
-See [implementation history](docs/CODEX_02_IMPLEMENTATION.md), [current completion report](docs/CODEX_02_COMPLETION.md), and the [stage 1 architecture](docs/CODEX_01_ARCHITECTURE.md).
+See [implementation history](docs/CODEX_02_IMPLEMENTATION.md), [current completion report](docs/CODEX_02_COMPLETION.md), [current final report](docs/CODEX_02_FINAL.md), and the [stage 1 architecture](docs/CODEX_01_ARCHITECTURE.md).

@@ -1,4 +1,4 @@
-"""Minimal bearer API adapter; read-only paths are explicitly allowlisted."""
+"""Minimal bearer API adapter with explicitly allowlisted operations."""
 
 from __future__ import annotations
 

@@ -41,3 +41,16 @@
 5. Панель после чистой установки доступна по SSH tunnel на loopback. Автоматическое выпускание сертификата и публичный HTTPS frontend пока отсутствуют.
 
 До устранения этих пунктов не объявлять Stage 2 complete и не устанавливать эту ревизию на `hl`.
+
+## Продолжение 30 октября 2026: реальные inbound E2E
+
+Исходный для продолжения commit: `c7c2702f2b221d35bea25b7502cfb5e67c4954c3`; текущий code commit: `5f9d1b1`. В [CI run 41031644723](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41031644723) все jobs (`unit`, `install-smoke`, `debian13`) завершились SUCCESS. Эта run подтверждает первоначальные lifecycle проверки и два новых сквозных профиля:
+
+- VLESS REALITY Vision: создание inbound и UUID-клиента официальным API, повторное чтение, идемпотентность, share link, RAW subscription по HTTP, Xray-клиент и контрольный трафик.
+- Mixed SOCKS5/HTTP: создание inbound с password account по официальной схеме, повторное чтение, идемпотентность и контрольный трафик через SOCKS5 и HTTP proxy. Для Mixed универсальная подписка не заявлена.
+
+При интеграции исправлены динамический `webBasePath` в OpenAPI, метка `Password (PublicKey)` в Xray, различие между числовым `ClientRecord.id` и `uuid`, тестовое направление на заблокированный `geoip:private` и неверное значение `shareAddrStrategy` для Mixed. Промежуточные CI runs с ошибками сохранены в истории Actions, а не засчитаны успешными.
+
+Локально: 32 tests, 31 passed, 1 skipped; `compileall` и `git diff --check` PASS. Ruff прошёл в CI unit job. Debian 13 проверен контейнерным preflight, не systemd VM. `hl` повторно проверен только на чтение: Debian 13 x86_64, x-ui/nginx/postgresql отсутствуют, слушает TCP 22, деревья `/usr/local/x-ui`, `/etc/x-ui`, `/etc/nginx`, `/etc/letsencrypt` отсутствуют. Сервер не изменялся.
+
+Остальные 14 inbound-профилей, JSON/Clash subscription, полный Nginx stream/SNI, публичный ACME, PostgreSQL-backed panel, cross-version update и rollback после такого update остаются незавершёнными. **STAGE 2 INCOMPLETE.** Подробные новые результаты: [INBOUND_E2E_RESULTS.md](INBOUND_E2E_RESULTS.md) и [CODEX_02_FINAL.md](CODEX_02_FINAL.md).
