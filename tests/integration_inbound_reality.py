@@ -32,6 +32,11 @@ class Echo(http.server.BaseHTTPRequestHandler):
         pass
 
 
+# Official 3x-ui blocks geoip:private by default. A public IP assigned to the
+# disposable runner's loopback lets us test traffic without weakening that rule.
+ECHO_ADDRESS = "8.8.8.8"
+
+
 def wait_port(port: int, timeout: float = 30) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -107,7 +112,9 @@ def main() -> None:
             root = Path(directory)
             config_file = root / "client.json"
             config_file.write_text(json.dumps(config), encoding="utf-8")
-            httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 32180), Echo)
+            subprocess.run(["ip", "address", "add", ECHO_ADDRESS + "/32", "dev", "lo"],
+                           check=True, capture_output=True, timeout=10)
+            httpd = http.server.ThreadingHTTPServer((ECHO_ADDRESS, 32180), Echo)
             thread = threading.Thread(target=httpd.serve_forever, daemon=True)
             thread.start()
             with (root / "xray-client.log").open("wb") as log:
@@ -121,7 +128,7 @@ def main() -> None:
                         result = subprocess.run(
                             ["curl", "--silent", "--show-error", "--fail", "--max-time", "8",
                              "--noproxy", "", "--socks5-hostname", "127.0.0.1:32122",
-                             "http://127.0.0.1:32180/"],
+                             f"http://{ECHO_ADDRESS}:32180/"],
                             capture_output=True, text=True, timeout=10)
                         if result.returncode == 0 and result.stdout == Echo.marker:
                             break
@@ -144,6 +151,8 @@ def main() -> None:
                         process.kill()
                     httpd.shutdown()
                     thread.join(timeout=5)
+                    subprocess.run(["ip", "address", "del", ECHO_ADDRESS + "/32",
+                                    "dev", "lo"], check=True, capture_output=True, timeout=10)
         print("VLESS REALITY Vision API, client, link, idempotence and traffic: PASS")
     finally:
         if created:
