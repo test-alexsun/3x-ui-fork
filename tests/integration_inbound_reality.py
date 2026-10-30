@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import http.server
 import json
 import os
@@ -11,6 +12,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.request
 import uuid
 from pathlib import Path
 
@@ -89,6 +91,23 @@ def main() -> None:
         record = api.read(f"clients/get/{spec.client_email}")
         client = record.get("client", record)
         client_id = client["uuid"]
+        sub_links = api.read(f"clients/subLinks/{client['subId']}")
+        assert isinstance(sub_links, list) and any(
+            isinstance(link, str) and link.startswith("vless://") for link in sub_links)
+        settings = api.read_post("setting/all")
+        assert isinstance(settings, dict) and settings.get("subEnable") is True
+        sub_path = settings["subPath"]
+        sub_port = settings["subPort"]
+        assert isinstance(sub_path, str) and sub_path.startswith("/") and sub_path.endswith("/")
+        assert isinstance(sub_port, int) and 1 <= sub_port <= 65535
+        subscription_url = f"http://127.0.0.1:{sub_port}{sub_path}{client['subId']}"
+        with urllib.request.urlopen(subscription_url, timeout=10) as response:
+            raw_subscription = response.read(2 * 1024 * 1024)
+            assert response.status == 200
+        if settings.get("subEncrypt"):
+            raw_subscription = base64.b64decode(raw_subscription, validate=True)
+        assert any(link.encode() in raw_subscription for link in sub_links), (
+            "RAW subscription omits official client link")
         short_id = reality["shortIds"][0]
         public_key = reality["settings"]["publicKey"]
         config = {
@@ -153,7 +172,8 @@ def main() -> None:
                     thread.join(timeout=5)
                     subprocess.run(["ip", "address", "del", ECHO_ADDRESS + "/32",
                                     "dev", "lo"], check=True, capture_output=True, timeout=10)
-        print("VLESS REALITY Vision API, client, link, idempotence and traffic: PASS")
+        print("VLESS REALITY Vision API, client, share link, RAW subscription, "
+              "idempotence and traffic: PASS")
     finally:
         if created:
             api.post(f"clients/del/{spec.client_email}", {})

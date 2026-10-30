@@ -21,6 +21,7 @@ class ApiUncertainError(ApiError):
 
 
 READ_PATHS = frozenset({"inbounds/list", "clients/list", "server/status"})
+READ_POST_PATHS = frozenset({"setting/all"})
 READ_DYNAMIC = re.compile(
     r"^(?:inbounds/get/[1-9][0-9]*|clients/(?:get|links)/[A-Za-z0-9_.+@-]+|"
     r"clients/subLinks/[A-Za-z0-9_-]+)$"
@@ -36,6 +37,7 @@ REQUIRED_OPERATIONS = {
     "clients/list": "get", "clients/get/{email}": "get",
     "clients/links/{email}": "get", "clients/add": "post",
     "clients/del/{email}": "post",
+    "setting/all": "post",
 }
 
 
@@ -126,6 +128,21 @@ class ApiClient:
             raise ApiError(f"read path is not allowlisted: {path}")
         try:
             data = json.loads(self._request("GET", path))
+        except ValueError as exc:
+            raise ApiError(f"invalid API JSON at {path}") from exc
+        if not isinstance(data, dict) or data.get("success") is not True:
+            raise ApiError(f"API rejected {path}")
+        return data.get("obj")
+
+    def read_post(self, path: str) -> object:
+        """Official API uses POST for a few read-only endpoints."""
+        if path not in READ_POST_PATHS:
+            raise ApiError(f"read-only POST path is not allowlisted: {path}")
+        try:
+            raw = self._request("POST", path, {})
+            data = json.loads(raw)
+        except ApiUncertainError as exc:
+            raise ApiError(f"API read failed at {path}") from exc
         except ValueError as exc:
             raise ApiError(f"invalid API JSON at {path}") from exc
         if not isinstance(data, dict) or data.get("success") is not True:

@@ -40,6 +40,10 @@ class ContractTests(unittest.TestCase):
                 client.read("inbounds/list")
         with self.assertRaisesRegex(ApiError, "allowlisted"):
             client.read("server/getDb")
+        with patch("urllib.request.urlopen", return_value=Response({"success": True, "obj": {"subPort": 2096}})):
+            self.assertEqual(client.read_post("setting/all"), {"subPort": 2096})
+        with self.assertRaisesRegex(ApiError, "allowlisted"):
+            client.read_post("setting/update")
 
     def test_token_remote_http_and_unknown_version_rejected(self):
         with self.assertRaisesRegex(ValueError, "TLS"):
