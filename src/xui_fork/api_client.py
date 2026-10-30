@@ -20,7 +20,8 @@ class ApiUncertainError(ApiError):
     """The server may have applied a write before the connection failed."""
 
 
-READ_PATHS = frozenset({"inbounds/list", "clients/list", "server/status"})
+READ_PATHS = frozenset({"inbounds/list", "clients/list", "server/status",
+                        "server/getNewVlessEnc"})
 READ_POST_PATHS = frozenset({"setting/all"})
 READ_DYNAMIC = re.compile(
     r"^(?:inbounds/get/[1-9][0-9]*|clients/(?:get|links)/[A-Za-z0-9_.+@-]+|"

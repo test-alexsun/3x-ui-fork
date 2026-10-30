@@ -11,6 +11,7 @@ from xui_fork.inbound_manager import (
     InboundManager,
     InboundSpec,
     MixedSpec,
+    MlkemTlsSpec,
     RealityXhttpSpec,
     WebTlsSpec,
     generate_reality_keypair,
@@ -33,6 +34,10 @@ class FakeApi:
             return self.rows[0]
         if path == "clients/list":
             return [entry["client"] for entry in self.clients.values()]
+        if path == "server/getNewVlessEnc":
+            return {"auths": [{"id": "mlkem768",
+                               "decryption": "mlkem768x25519plus.native.600s.server-key",
+                               "encryption": "mlkem768x25519plus.native.0rtt.client-key"}]}
         if path.startswith("clients/get/"):
             return self.clients.get(path.removeprefix("clients/get/"))
         if path.startswith("clients/links/"):
@@ -180,3 +185,21 @@ class InboundManagerTests(unittest.TestCase):
         self.assertEqual(api.rows[0]["disableFlow"], True)
         client = json.loads(api.rows[0]["settings"])["clients"][0]
         self.assertEqual(client["flow"], "")
+
+    def test_mlkem_tls_uses_official_pair_without_fallbacks(self):
+        api = FakeApi()
+        manager = InboundManager(api)
+        mlkem = MlkemTlsSpec("DE", "lab", 32128, "127.0.0.1",
+                             "ci.example.test", "/ci-mlkem", "mlkem@example.test",
+                             Path.cwd() / "ci-cert.pem", Path.cwd() / "ci-key.pem")
+        with patch("xui_fork.inbound_manager.require_certificate"):
+            first = manager.ensure_mlkem_tls(mlkem)
+            second = manager.ensure_mlkem_tls(mlkem)
+        self.assertTrue(first["created"])
+        self.assertFalse(second["created"])
+        self.assertEqual(api.posts, ["inbounds/add", "clients/add"])
+        settings = json.loads(api.rows[0]["settings"])
+        self.assertNotIn("fallbacks", settings)
+        self.assertTrue(settings["decryption"].startswith("mlkem768x25519plus.native."))
+        self.assertTrue(settings["encryption"].startswith("mlkem768x25519plus.native."))
+        self.assertEqual(json.loads(api.rows[0]["streamSettings"])["network"], "xhttp")

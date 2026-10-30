@@ -207,6 +207,43 @@ class RealityXhttpSpec:
                 raise ValueError("public address must be a DNS name or IP address") from exc
 
 
+@dataclass(frozen=True)
+class MlkemTlsSpec:
+    country: str
+    subdomain: str
+    port: int
+    public_address: str
+    server_name: str
+    ws_path: str
+    client_email: str
+    cert_file: Path
+    key_file: Path
+
+    profile = "VLESS Encryption ML-KEM768"
+    protocol = "vless"
+    network = "xhttp"
+
+    @property
+    def remark(self) -> str:
+        return f"{self.country}-{self.subdomain} | {self.profile}"
+
+    def validate(self, panel_version: str) -> None:
+        validate_profile(self.profile, panel_version)
+        if (not COUNTRY.fullmatch(self.country) or not SUBDOMAIN.fullmatch(self.subdomain)
+                or not 1 <= self.port <= 65535 or not DOMAIN.fullmatch(self.server_name)
+                or not EMAIL.fullmatch(self.client_email)
+                or not re.fullmatch(r"/[A-Za-z0-9/_-]{1,100}", self.ws_path)):
+            raise ValueError("invalid VLESS Encryption ML-KEM768 identity or transport")
+        if not DOMAIN.fullmatch(self.public_address):
+            try:
+                ipaddress.ip_address(self.public_address)
+            except ValueError as exc:
+                raise ValueError("public address must be a DNS name or IP address") from exc
+        if not self.cert_file.is_absolute() or not self.key_file.is_absolute():
+            raise ValueError("TLS certificate and key paths must be absolute")
+        require_certificate(self.cert_file, self.key_file, self.server_name)
+
+
 def generate_reality_keypair(xray: Path) -> tuple[str, str]:
     if not xray.is_file():
         raise InboundError("pinned Xray binary is unavailable")
@@ -272,9 +309,15 @@ def _reality_xhttp_payload(spec: RealityXhttpSpec, private_key: str,
     return payload
 
 
-def _web_tls_payload(spec: WebTlsSpec | GrpcTlsSpec) -> dict:
+def _web_tls_payload(spec: WebTlsSpec | GrpcTlsSpec | MlkemTlsSpec,
+                     mlkem: tuple[str, str] | None = None) -> dict:
     if spec.protocol == "vless":
         settings = {"clients": [], "decryption": "none", "encryption": "none", "fallbacks": []}
+        if isinstance(spec, MlkemTlsSpec):
+            if mlkem is None:
+                raise ValueError("ML-KEM768 keypair required")
+            settings.pop("fallbacks")
+            settings["decryption"], settings["encryption"] = mlkem
     elif spec.protocol == "trojan":
         settings = {"clients": [], "fallbacks": []}
     else:
@@ -319,7 +362,7 @@ def _inbounds(api: ApiClient) -> list[dict]:
 
 
 def _matching(rows: list[dict], spec: InboundSpec | MixedSpec | WebTlsSpec |
-              GrpcTlsSpec | RealityXhttpSpec) -> dict | None:
+              GrpcTlsSpec | RealityXhttpSpec | MlkemTlsSpec) -> dict | None:
     matches = [row for row in rows if row.get("remark") == spec.remark]
     if len(matches) > 1:
         raise InboundConflict("multiple inbounds share the managed remark")
@@ -363,6 +406,22 @@ def _verify_client(record: dict, email: str, client_id: str, inbound_id: int) ->
         raise InboundError("client was not attached to created inbound")
 
 
+def _new_mlkem_auth(api: ApiClient) -> tuple[str, str]:
+    response = api.read("server/getNewVlessEnc")
+    auths = response.get("auths") if isinstance(response, dict) else None
+    matches = [item for item in auths if isinstance(item, dict) and item.get("id") == "mlkem768"] if isinstance(auths, list) else []
+    if len(matches) != 1:
+        raise InboundError("official panel returned no unique ML-KEM768 authentication")
+    auth = matches[0]
+    decryption, encryption = auth.get("decryption"), auth.get("encryption")
+    prefix = "mlkem768x25519plus.native."
+    if (not isinstance(decryption, str) or not isinstance(encryption, str)
+            or not decryption.startswith(prefix) or not encryption.startswith(prefix)
+            or len(decryption) <= len(prefix) or len(encryption) <= len(prefix)):
+        raise InboundError("official panel returned invalid ML-KEM768 key format")
+    return decryption, encryption
+
+
 class InboundManager:
     def __init__(self, api: ApiClient, *, panel_version: str = "3.11.0",
                  xray: Path | None = None):
@@ -384,7 +443,10 @@ class InboundManager:
     def ensure_trojan_grpc_tls(self, spec: GrpcTlsSpec) -> dict:
         return self._ensure_web_tls(spec)
 
-    def _ensure_web_tls(self, spec: WebTlsSpec | GrpcTlsSpec,
+    def ensure_mlkem_tls(self, spec: MlkemTlsSpec) -> dict:
+        return self._ensure_web_tls(spec)
+
+    def _ensure_web_tls(self, spec: WebTlsSpec | GrpcTlsSpec | MlkemTlsSpec,
                         *, client_id: str | None = None) -> dict:
         spec.validate(self.panel_version)
         self.api.verify_contract()
@@ -394,9 +456,12 @@ class InboundManager:
                 raise InboundConflict("inbound port already belongs to another profile")
         existing = _matching(rows, spec)
         created = False
+        expected_mlkem = None
         if existing is None:
+            if isinstance(spec, MlkemTlsSpec):
+                expected_mlkem = _new_mlkem_auth(self.api)
             try:
-                self.api.post("inbounds/add", _web_tls_payload(spec))
+                self.api.post("inbounds/add", _web_tls_payload(spec, expected_mlkem))
             except ApiUncertainError:
                 existing = _matching(_inbounds(self.api), spec)
                 if existing is None:
@@ -423,6 +488,17 @@ class InboundManager:
                 or transport.get(transport_key) != transport_value
                 or tls.get("serverName") != spec.server_name):
             raise InboundConflict("existing TLS transport differs")
+        if isinstance(spec, MlkemTlsSpec):
+            inbound_settings = normalize_embedded_json(detail.get("settings"))
+            if not isinstance(inbound_settings, dict):
+                raise InboundConflict("ML-KEM768 settings missing")
+            observed = (inbound_settings.get("decryption"),
+                        inbound_settings.get("encryption"))
+            if (not all(isinstance(value, str) and
+                        value.startswith("mlkem768x25519plus.native.") for value in observed)
+                    or "fallbacks" in inbound_settings
+                    or (expected_mlkem is not None and observed != expected_mlkem)):
+                raise InboundConflict("ML-KEM768 authentication differs")
         record = _client_record(self.api, spec.client_email)
         if record is not None and client_id is None:
             field = "password" if spec.protocol == "trojan" else "uuid"
