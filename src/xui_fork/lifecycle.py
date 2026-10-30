@@ -9,6 +9,7 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from .installer import InstallationNotReady, _run, file_digest
@@ -54,6 +55,16 @@ def _verify_owned(paths: Paths, state: dict) -> None:
             raise InstallationNotReady(f"owned {key} missing or modified")
 
 
+def _wait_loopback(port: int) -> None:
+    for _ in range(20):
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                return
+        except OSError:
+            time.sleep(1)
+    raise InstallationNotReady("owned panel loopback listener did not become healthy")
+
+
 def repair_owned(paths: Paths = Paths()) -> dict:
     _require_linux_root()
     state = _state(paths)
@@ -84,8 +95,7 @@ def repair_owned(paths: Paths = Paths()) -> dict:
     if active.returncode != 0:
         _run(["systemctl", "start", "x-ui"])
         repaired.append("service-start")
-    with socket.create_connection(("127.0.0.1", int(state["panel_port"])), timeout=3):
-        pass
+    _wait_loopback(int(state["panel_port"]))
     return {"repaired": repaired, "service": "active"}
 
 
@@ -150,8 +160,7 @@ def rollback_uninstall(paths: Paths = Paths()) -> dict:
         _run(["systemctl", "daemon-reload"])
         _run(["systemctl", "enable", "x-ui"])
         _run(["systemctl", "start", "x-ui"])
-        with socket.create_connection(("127.0.0.1", int(state["panel_port"])), timeout=3):
-            pass
+        _wait_loopback(int(state["panel_port"]))
         state["status"] = "installed"
         state.pop("checkpoint", None)
         _save_state(paths.state, state)

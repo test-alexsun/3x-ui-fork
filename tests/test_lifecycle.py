@@ -4,10 +4,10 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from xui_fork.installer import InstallationNotReady, file_digest
-from xui_fork.lifecycle import repair_owned, rollback_uninstall, uninstall_owned
+from xui_fork.lifecycle import _wait_loopback, repair_owned, rollback_uninstall, uninstall_owned
 from xui_fork.planner import Paths
 from xui_fork.updater import rollback_update, update_owned
 
@@ -73,6 +73,14 @@ class LifecycleTests(unittest.TestCase):
             with self.assertRaisesRegex(InstallationNotReady, "confirm"):
                 uninstall_owned(confirmed=False, paths=self.paths)
         self.assertTrue(self.paths.panel.is_dir())
+
+    def test_loopback_health_waits_for_service_start(self):
+        with (patch("xui_fork.lifecycle.socket.create_connection",
+                    side_effect=[OSError("not yet"), MagicMock()]) as connect,
+              patch("xui_fork.lifecycle.time.sleep") as sleep):
+            _wait_loopback(2053)
+        self.assertEqual(connect.call_count, 2)
+        sleep.assert_called_once_with(1)
 
     def test_update_swaps_binary_and_preserves_database(self):
         database = self.paths.database / "x-ui.db"
