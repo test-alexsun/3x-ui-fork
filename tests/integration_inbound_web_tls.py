@@ -51,6 +51,10 @@ def certificates(root: Path) -> tuple[Path, Path, Path]:
 def client_config(spec: WebTlsSpec, client_id: str, ca_cert: Path, socks_port: int) -> dict:
     user = ({"id": client_id, "encryption": "none"} if spec.protocol == "vless"
             else {"id": client_id, "alterId": 0, "security": "auto"})
+    transport = ({"xhttpSettings": {"path": spec.ws_path, "host": spec.server_name,
+                                    "mode": "stream-up"}} if spec.network == "xhttp" else
+                 {"wsSettings": {"path": spec.ws_path,
+                                 "headers": {"Host": spec.server_name}}})
     return {
         "log": {"loglevel": "debug"},
         "inbounds": [{"tag": "ci-socks", "listen": "127.0.0.1", "port": socks_port,
@@ -59,11 +63,10 @@ def client_config(spec: WebTlsSpec, client_id: str, ca_cert: Path, socks_port: i
                        "settings": {"vnext": [{"address": "127.0.0.1", "port": spec.port,
                                                "users": [user]}]},
                        "streamSettings": {
-                           "network": "ws", "security": "tls",
-                           "wsSettings": {"path": spec.ws_path,
-                                          "headers": {"Host": spec.server_name}},
+                           "network": spec.network, "security": "tls", **transport,
                            "tlsSettings": {"serverName": spec.server_name,
-                                           "alpn": ["http/1.1"],
+                                           "alpn": (["h2", "http/1.1"] if spec.network == "xhttp"
+                                                    else ["http/1.1"]),
                                            "disableSystemRoot": True,
                                            "certificates": [{"certificateFile": str(ca_cert),
                                                              "usage": "verify"}]}}}],
@@ -76,9 +79,10 @@ def verify_link(link: str, spec: WebTlsSpec, client_id: str) -> None:
         query = urllib.parse.parse_qs(parsed.query)
         assert parsed.scheme == "vless" and parsed.username == client_id
         assert parsed.hostname == spec.public_address and parsed.port == spec.port
-        assert query.get("type") == ["ws"] and query.get("security") == ["tls"]
+        assert query.get("type") == [spec.network] and query.get("security") == ["tls"]
         assert query.get("sni") == [spec.server_name]
-        assert query.get("path") == [spec.ws_path]
+        if spec.network == "ws":
+            assert query.get("path") == [spec.ws_path]
     else:
         assert link.startswith("vmess://")
         payload = link.removeprefix("vmess://")
@@ -109,14 +113,15 @@ def exercise(api: ApiClient, manager: InboundManager, xray: Path, ca: Path,
     spec = WebTlsSpec(profile, "DE", "ci", 32220 + index, "127.0.0.1",
                       "ci.example.test", f"/ci-ws-{index}",
                       f"ci-web-{index}@example.test", cert, key)
-    first = manager.ensure_websocket_tls(spec)
+    ensure = manager.ensure_xhttp_tls if spec.network == "xhttp" else manager.ensure_websocket_tls
+    first = ensure(spec)
     assert first["created"], "fresh runner should create WebSocket TLS inbound"
     try:
-        second = manager.ensure_websocket_tls(spec)
+        second = ensure(spec)
         assert not second["created"] and second["inbound_id"] == first["inbound_id"]
         detail = api.read(f"inbounds/get/{first['inbound_id']}")
         stream = normalize_embedded_json(detail["streamSettings"])
-        assert stream["wsSettings"]["path"] == spec.ws_path
+        assert stream[spec.network + "Settings"]["path"] == spec.ws_path
         assert stream["tlsSettings"]["serverName"] == spec.server_name
         record = api.read(f"clients/get/{spec.client_email}")
         client = record["client"]
@@ -183,6 +188,7 @@ def main() -> None:
         try:
             exercise(api, manager, xray, ca, cert, key, root, "VLESS WebSocket TLS", 1)
             exercise(api, manager, xray, ca, cert, key, root, "VMess WebSocket TLS", 2)
+            exercise(api, manager, xray, ca, cert, key, root, "VLESS XHTTP TLS", 3)
         finally:
             httpd.shutdown()
             thread.join(timeout=5)

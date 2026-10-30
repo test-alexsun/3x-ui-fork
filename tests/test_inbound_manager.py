@@ -114,7 +114,8 @@ class InboundManagerTests(unittest.TestCase):
 
     def test_websocket_tls_payload_and_client_readback(self):
         for profile, protocol in (("VLESS WebSocket TLS", "vless"),
-                                  ("VMess WebSocket TLS", "vmess")):
+                                  ("VMess WebSocket TLS", "vmess"),
+                                  ("VLESS XHTTP TLS", "vless")):
             with self.subTest(profile=profile):
                 api = FakeApi()
                 manager = InboundManager(api)
@@ -122,12 +123,15 @@ class InboundManagerTests(unittest.TestCase):
                                  "ci.example.test", "/ci-ws", "ws@example.test",
                                  Path.cwd() / "ci-cert.pem", Path.cwd() / "ci-key.pem")
                 with patch("xui_fork.inbound_manager.require_certificate"):
-                    first = manager.ensure_websocket_tls(web)
-                    second = manager.ensure_websocket_tls(web)
+                    ensure = (manager.ensure_xhttp_tls if profile == "VLESS XHTTP TLS"
+                              else manager.ensure_websocket_tls)
+                    first = ensure(web)
+                    second = ensure(web)
                 self.assertTrue(first["created"])
                 self.assertFalse(second["created"])
                 self.assertEqual(api.posts, ["inbounds/add", "clients/add"])
                 self.assertEqual(api.rows[0]["protocol"], protocol)
                 stream = json.loads(api.rows[0]["streamSettings"])
-                self.assertEqual(stream["wsSettings"]["path"], "/ci-ws")
+                network = "xhttp" if profile == "VLESS XHTTP TLS" else "ws"
+                self.assertEqual(stream[network + "Settings"]["path"], "/ci-ws")
                 self.assertEqual(stream["tlsSettings"]["serverName"], "ci.example.test")

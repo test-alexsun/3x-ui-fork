@@ -116,11 +116,16 @@ class WebTlsSpec:
 
     @property
     def protocol(self) -> str:
-        return "vless" if self.profile == "VLESS WebSocket TLS" else "vmess"
+        return "vmess" if self.profile == "VMess WebSocket TLS" else "vless"
+
+    @property
+    def network(self) -> str:
+        return "xhttp" if self.profile == "VLESS XHTTP TLS" else "ws"
 
     def validate(self, panel_version: str) -> None:
         validate_profile(self.profile, panel_version)
-        if self.profile not in {"VLESS WebSocket TLS", "VMess WebSocket TLS"}:
+        if self.profile not in {"VLESS WebSocket TLS", "VMess WebSocket TLS",
+                                "VLESS XHTTP TLS"}:
             raise InboundError(f"web TLS implementation unavailable: {self.profile}")
         if (not COUNTRY.fullmatch(self.country) or not SUBDOMAIN.fullmatch(self.subdomain)
                 or not 1 <= self.port <= 65535 or not DOMAIN.fullmatch(self.server_name)
@@ -188,16 +193,20 @@ def _wire_payload(spec: InboundSpec, private_key: str, public_key: str,
 def _web_tls_payload(spec: WebTlsSpec) -> dict:
     settings = ({"clients": [], "decryption": "none", "encryption": "none", "fallbacks": []}
                 if spec.protocol == "vless" else {"clients": []})
+    transport = ({"xhttpSettings": {"path": spec.ws_path, "host": spec.server_name,
+                                    "mode": "stream-up"}} if spec.network == "xhttp" else
+                 {"wsSettings": {"acceptProxyProtocol": False, "path": spec.ws_path,
+                                 "host": spec.server_name, "headers": {},
+                                 "heartbeatPeriod": 0}})
     stream = {
-        "network": "ws", "security": "tls",
-        "wsSettings": {"acceptProxyProtocol": False, "path": spec.ws_path,
-                       "host": spec.server_name, "headers": {}, "heartbeatPeriod": 0},
+        "network": spec.network, "security": "tls", **transport,
         "tlsSettings": {"serverName": spec.server_name, "minVersion": "1.2",
                         "maxVersion": "1.3", "rejectUnknownSni": True,
                         "certificates": [{"certificateFile": str(spec.cert_file),
                                           "keyFile": str(spec.key_file),
                                           "usage": "encipherment"}],
-                        "alpn": ["http/1.1"], "settings": {"fingerprint": ""}},
+                        "alpn": (["h2", "http/1.1"] if spec.network == "xhttp"
+                                 else ["http/1.1"]), "settings": {"fingerprint": ""}},
     }
     return {
         "up": 0, "down": 0, "total": 0, "remark": spec.remark,
@@ -207,7 +216,7 @@ def _web_tls_payload(spec: WebTlsSpec) -> dict:
         "settings": json.dumps(settings, separators=(",", ":")),
         "streamSettings": json.dumps(stream, separators=(",", ":")),
         "sniffing": json.dumps({"enabled": False}),
-        "tag": f"in-{spec.port}-ws", "shareAddrStrategy": "custom",
+        "tag": f"in-{spec.port}-{spec.network}", "shareAddrStrategy": "custom",
         "shareAddr": spec.public_address, "subSortIndex": 1,
         "excludeFromSub": False, "disableFlow": True,
     }
@@ -271,6 +280,16 @@ class InboundManager:
         self.xray = xray or Path(f"/usr/local/x-ui/bin/xray-linux-{arch}")
 
     def ensure_websocket_tls(self, spec: WebTlsSpec, *, client_id: str | None = None) -> dict:
+        if spec.network != "ws":
+            raise InboundError("expected WebSocket TLS profile")
+        return self._ensure_web_tls(spec, client_id=client_id)
+
+    def ensure_xhttp_tls(self, spec: WebTlsSpec, *, client_id: str | None = None) -> dict:
+        if spec.profile != "VLESS XHTTP TLS":
+            raise InboundError("expected VLESS XHTTP TLS profile")
+        return self._ensure_web_tls(spec, client_id=client_id)
+
+    def _ensure_web_tls(self, spec: WebTlsSpec, *, client_id: str | None = None) -> dict:
         spec.validate(self.panel_version)
         self.api.verify_contract()
         rows = _inbounds(self.api)
@@ -298,10 +317,11 @@ class InboundManager:
         if not isinstance(detail, dict) or detail.get("port") != spec.port:
             raise InboundError("WebSocket TLS detail read-back missing")
         stream = normalize_embedded_json(detail.get("streamSettings"))
-        ws = stream.get("wsSettings", {}) if isinstance(stream, dict) else {}
+        transport = stream.get(f"{spec.network}Settings", {}) if isinstance(stream, dict) else {}
         tls = stream.get("tlsSettings", {}) if isinstance(stream, dict) else {}
-        if (not isinstance(stream, dict) or stream.get("network") != "ws"
-                or stream.get("security") != "tls" or ws.get("path") != spec.ws_path
+        if (not isinstance(stream, dict) or not isinstance(transport, dict)
+                or not isinstance(tls, dict) or stream.get("network") != spec.network
+                or stream.get("security") != "tls" or transport.get("path") != spec.ws_path
                 or tls.get("serverName") != spec.server_name):
             raise InboundConflict("existing WebSocket TLS transport differs")
         record = _client_record(self.api, spec.client_email)
