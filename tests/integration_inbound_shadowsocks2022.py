@@ -70,10 +70,35 @@ def verify_udp(socks_port: int, echo_port: int) -> None:
         raise AssertionError("Shadowsocks 2022 UDP traffic did not reach echo")
 
 
+def wait_backend_config(inbound_port: int, server_key: str, client_key: str) -> None:
+    """Wait for the panel to write the attached client into Xray's config."""
+    backend_file = Path("/usr/local/x-ui/bin/config.json")
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        try:
+            backend = json.loads(backend_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            time.sleep(0.5)
+            continue
+        matches = [row for row in backend.get("inbounds", [])
+                   if row.get("port") == inbound_port]
+        if len(matches) == 1:
+            wire = normalize_embedded_json(matches[0].get("settings", {}))
+            if (matches[0].get("protocol") == "shadowsocks"
+                    and wire.get("method") == Shadowsocks2022Spec.method
+                    and wire.get("password") == server_key
+                    and any(c.get("password") == client_key
+                            for c in wire.get("clients", []) if isinstance(c, dict))):
+                return
+        time.sleep(0.5)
+    raise AssertionError("Shadowsocks 2022 client not present in generated Xray config")
+
+
 def exercise_traffic(xray: Path, config: dict, root: Path, inbound_port: int,
                      server_key: str, client_key: str) -> None:
     config_path = root / "client.json"
     config_path.write_text(json.dumps(config), encoding="utf-8")
+    wait_backend_config(inbound_port, server_key, client_key)
     run("ip", "address", "add", ECHO_ADDRESS + "/32", "dev", "lo")
     httpd = http.server.ThreadingHTTPServer((ECHO_ADDRESS, 32287), Echo)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -92,7 +117,7 @@ def exercise_traffic(xray: Path, config: dict, root: Path, inbound_port: int,
                 wait_port(32237)
                 wait_port(inbound_port)
                 last = ""
-                for _ in range(12):
+                for _ in range(30):
                     result = subprocess.run(
                         ["curl", "--silent", "--show-error", "--fail", "--max-time", "8",
                          "--noproxy", "", "--socks5-hostname", "127.0.0.1:32237",
