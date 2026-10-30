@@ -14,7 +14,14 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from integration_inbound_reality import ECHO_ADDRESS, Echo, safe_log_excerpt, token_from_cli, wait_port
+from integration_inbound_reality import (
+    ECHO_ADDRESS,
+    Echo,
+    safe_log_excerpt,
+    token_from_cli,
+    wait_port,
+)
+
 from xui_fork.api_client import ApiClient, normalize_embedded_json
 from xui_fork.inbound_manager import InboundManager, WebTlsSpec
 
