@@ -223,7 +223,7 @@ class InboundManager:
                     "udp": False, "ip": "127.0.0.1"}, separators=(",", ":")),
                 "streamSettings": json.dumps({"network": "tcp", "security": "none"}),
                 "sniffing": json.dumps({"enabled": False}),
-                "tag": f"in-{spec.port}-tcp", "shareAddrStrategy": "default",
+                "tag": f"in-{spec.port}-tcp", "shareAddrStrategy": "listen",
                 "shareAddr": "", "subSortIndex": 1, "excludeFromSub": True,
                 "disableFlow": True,
             }

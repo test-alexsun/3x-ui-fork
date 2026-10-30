@@ -107,5 +107,6 @@ class InboundManagerTests(unittest.TestCase):
         self.assertEqual(api.posts, ["inbounds/add"])
         self.assertEqual(json.loads(api.rows[0]["settings"])["accounts"][0]["user"],
                          mixed.username)
+        self.assertEqual(api.rows[0]["shareAddrStrategy"], "listen")
         with self.assertRaises(InboundConflict):
             manager.ensure_mixed(MixedSpec("DE", "lab", 32124, "labuser01", "b" * 24))
