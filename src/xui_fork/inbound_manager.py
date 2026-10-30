@@ -634,7 +634,9 @@ class InboundManager:
         observed = record.get("client", record)
         if not isinstance(observed, dict):
             raise InboundError("WireGuard client read-back malformed")
-        addresses = observed.get("allowedIPs")
+        raw_addresses = observed.get("allowedIPs")
+        addresses = ([part.strip() for part in raw_addresses.split(",") if part.strip()]
+                     if isinstance(raw_addresses, str) else raw_addresses)
         subnet = ipaddress.ip_network(spec.subnet)
         try:
             valid_address = (isinstance(addresses, list) and len(addresses) == 1
@@ -642,11 +644,14 @@ class InboundManager:
                              and ipaddress.ip_address(addresses[0].split("/")[0]) in subnet)
         except (TypeError, ValueError):
             valid_address = False
-        if (observed.get("email") != spec.client_email
-                or not _valid_wireguard_key(observed.get("privateKey"))
-                or not _valid_wireguard_key(observed.get("publicKey"))
-                or not valid_address or inbound_id not in record.get("inboundIds", [])):
-            raise InboundConflict("WireGuard client key, tunnel address or attachment differs")
+        checks = {"email": observed.get("email") == spec.client_email,
+                  "private_key": _valid_wireguard_key(observed.get("privateKey")),
+                  "public_key": _valid_wireguard_key(observed.get("publicKey")),
+                  "tunnel_address": valid_address,
+                  "attachment": inbound_id in record.get("inboundIds", [])}
+        if not all(checks.values()):
+            failed = ", ".join(name for name, passed in checks.items() if not passed)
+            raise InboundConflict(f"WireGuard client read-back failed: {failed}")
         detail = self.api.read(f"inbounds/get/{inbound_id}")
         settings = normalize_embedded_json(detail.get("settings"))
         if not any(c.get("email") == spec.client_email

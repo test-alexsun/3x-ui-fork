@@ -122,7 +122,10 @@ def main() -> None:
             assert settings["subnetIp"] == "10.66.0.0" and settings["subnetCidr"] == 24
             record = api.read(f"clients/get/{spec.client_email}")
             client = record["client"]
-            assert len(client["allowedIPs"]) == 1
+            # ClientRecord serializes this field as CSV; inbound settings use a list.
+            addresses = [part.strip() for part in client["allowedIPs"].split(",")
+                         if part.strip()]
+            assert len(addresses) == 1
             wait_backend_peer(spec.port, client["publicKey"])
             links = api.read(f"clients/links/{spec.client_email}")
             assert isinstance(links, list) and len(links) == 1
@@ -131,7 +134,7 @@ def main() -> None:
             assert parsed.scheme == "wireguard"
             assert urllib.parse.unquote(parsed.username) == client["privateKey"]
             assert parsed.hostname == spec.public_address and parsed.port == spec.port
-            assert query.get("address") == client["allowedIPs"]
+            assert query.get("address") == addresses
             assert query.get("mtu") == [str(spec.mtu)]
             assert len(query.get("publickey", [])) == 1
             sub_links = api.read(f"clients/subLinks/{client['subId']}")
@@ -143,7 +146,7 @@ def main() -> None:
                               "protocol": "socks", "settings": {"auth": "noauth", "udp": True}}],
                 "outbounds": [{"tag": "ci-wg", "protocol": "wireguard",
                                "settings": {"secretKey": client["privateKey"],
-                                            "address": client["allowedIPs"],
+                                            "address": addresses,
                                             "peers": [{"publicKey": query["publickey"][0],
                                                        "endpoint": f"127.0.0.1:{spec.port}",
                                                        "allowedIPs": ["0.0.0.0/0"]}],

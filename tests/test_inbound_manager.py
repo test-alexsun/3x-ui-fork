@@ -60,7 +60,10 @@ class FakeApi:
                           "publicKey": base64.b64encode(b"d" * 32).decode(),
                           "allowedIPs": ["10.66.0.2/32"]}
             self.clients[client["email"]] = {
-                "client": {**client, "id": 17, "uuid": client.get("id", "")},
+                "client": {**client, "id": 17, "uuid": client.get("id", ""),
+                           "allowedIPs": ",".join(client["allowedIPs"])
+                           if self.rows[0]["protocol"] == "wireguard"
+                           else client.get("allowedIPs", [])},
                 "inboundIds": payload["inboundIds"],
             }
             settings = json.loads(self.rows[0]["settings"])
