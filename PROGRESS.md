@@ -28,6 +28,8 @@ Branch: `codex/stage2-completion`. Preserve completed work; never push to `main`
 
 - Group D AmneziaWG 3.1 needs a compatible native client for data-path E2E; MTProto forwards to Telegram and requires an authentic protocol client/service. These are pending, so independent MASQUE proceeds first under the original staged-work rule.
 - Commit `a3de503` adds official MASQUE CONNECT-IP inbound/client settings and an Xray HTTP/3/TLS client E2E with TCP and SOCKS5 UDP echoes. [CI 41096545372](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41096545372) failed before traffic because the test assumed `clients/links` returned an empty list. The pinned panel returned a nonempty value. The test now records only link schemes and proceeds to traffic; retry pending. Do not mark MASQUE PASS until all jobs and TCP/UDP checks succeed. Local 42 tests passed with one Windows Nginx skip; compile and diff checks passed.
+- Fix commit `ca3243d` retained the real MASQUE traffic test while inspecting the panel's link response without logging contents.
+- [CI 41097437075](https://github.com/test-alexsun/3x-ui-fork/actions/runs/41097437075) failed before traffic again: the official panel serializes an empty Go link slice as JSON `null` (`ApiClient.read` returns `None`). The test now accepts `null` or a list. Run a new CI to reach CONNECT-IP traffic.
 
 ## Current unfinished work
 

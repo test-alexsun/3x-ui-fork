@@ -123,8 +123,8 @@ def main() -> None:
             client = record["client"]
             wait_backend_user(spec.port, spec.client_email)
             links = api.read(f"clients/links/{spec.client_email}")
-            assert isinstance(links, list), "MASQUE client links response is malformed"
-            link_schemes = sorted({urllib.parse.urlsplit(link).scheme for link in links
+            assert links is None or isinstance(links, list), "MASQUE links response is malformed"
+            link_schemes = sorted({urllib.parse.urlsplit(link).scheme for link in (links or [])
                                    if isinstance(link, str) and link})
             config = {
                 "log": {"loglevel": "debug"},
