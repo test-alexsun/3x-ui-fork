@@ -1,0 +1,141 @@
+"""Disposable GitHub runner E2E for official VLESS REALITY Vision."""
+
+from __future__ import annotations
+
+import http.server
+import json
+import os
+import re
+import socket
+import subprocess
+import tempfile
+import threading
+import time
+import uuid
+from pathlib import Path
+
+from xui_fork.api_client import ApiClient, normalize_embedded_json
+from xui_fork.inbound_manager import InboundManager, InboundSpec
+
+
+class Echo(http.server.BaseHTTPRequestHandler):
+    marker = uuid.uuid4().hex
+
+    def do_GET(self):
+        body = self.marker.encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):
+        pass
+
+
+def wait_port(port: int, timeout: float = 30) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                return
+        except OSError:
+            time.sleep(0.5)
+    raise AssertionError(f"loopback port {port} did not become ready")
+
+
+def token_from_cli(binary: Path) -> str:
+    output = subprocess.run([str(binary), "setting", "-getApiToken"], check=True,
+                            capture_output=True, text=True, timeout=20).stdout
+    match = re.search(r"(?m)^apiToken:\s*(\S+)\s*$", output)
+    if match is None:
+        raise AssertionError("official CLI did not return an API token")
+    return match.group(1)
+
+
+def main() -> None:
+    if os.environ.get("XUI_RUN_INBOUND_E2E") != "1":
+        raise RuntimeError("disposable inbound E2E must be explicitly enabled")
+    credentials = json.loads(Path("/etc/x-ui/fork-credentials.json").read_text())
+    port = credentials["port"]
+    xray = Path("/usr/local/x-ui/bin/xray-linux-amd64")
+    api = ApiClient(f"http://127.0.0.1:{port}",
+                    token_from_cli(Path("/usr/local/x-ui/x-ui")),
+                    credentials["web_base_path"])
+    spec = InboundSpec("VLESS REALITY Vision", "DE", "ci", 32121, "127.0.0.1",
+                       "www.cloudflare.com", "www.cloudflare.com", "ci-reality@example.test")
+    manager = InboundManager(api, xray=xray)
+    created = False
+    try:
+        first = manager.ensure_reality_vision(spec)
+        created = first["created"]
+        assert created, "fresh runner should create a new inbound"
+        second = manager.ensure_reality_vision(spec)
+        assert not second["created"] and second["inbound_id"] == first["inbound_id"]
+        detail = api.read(f"inbounds/get/{first['inbound_id']}")
+        stream = normalize_embedded_json(detail["streamSettings"])
+        reality = stream["realitySettings"]
+        record = api.read(f"clients/get/{spec.client_email}")
+        client = record.get("client", record)
+        client_id = client.get("id") or client.get("uuid")
+        short_id = reality["shortIds"][0]
+        public_key = reality["settings"]["publicKey"]
+        config = {
+            "log": {"loglevel": "warning"},
+            "inbounds": [{"tag": "ci-socks", "listen": "127.0.0.1", "port": 32122,
+                          "protocol": "socks", "settings": {"auth": "noauth", "udp": False}}],
+            "outbounds": [{"tag": "ci-vless", "protocol": "vless",
+                           "settings": {"vnext": [{"address": "127.0.0.1", "port": spec.port,
+                                                   "users": [{"id": client_id,
+                                                              "encryption": "none",
+                                                              "flow": "xtls-rprx-vision"}]}]},
+                           "streamSettings": {"network": "tcp", "security": "reality",
+                                              "realitySettings": {
+                                                  "serverName": spec.server_name,
+                                                  "fingerprint": "chrome",
+                                                  "publicKey": public_key,
+                                                  "shortId": short_id,
+                                                  "spiderX": "/"}}}],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_file = root / "client.json"
+            config_file.write_text(json.dumps(config), encoding="utf-8")
+            httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 32180), Echo)
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            with (root / "xray-client.log").open("wb") as log:
+                process = subprocess.Popen([str(xray), "run", "-config", str(config_file)],
+                                           stdout=log, stderr=subprocess.STDOUT)
+                try:
+                    wait_port(32122)
+                    wait_port(spec.port)
+                    last = ""
+                    for _ in range(20):
+                        result = subprocess.run(
+                            ["curl", "--silent", "--show-error", "--fail", "--max-time", "8",
+                             "--noproxy", "", "--socks5-hostname", "127.0.0.1:32122",
+                             "http://127.0.0.1:32180/"],
+                            capture_output=True, text=True, timeout=10)
+                        if result.returncode == 0 and result.stdout == Echo.marker:
+                            break
+                        last = f"curl exit={result.returncode}: {result.stderr.strip()}"
+                        time.sleep(1)
+                    else:
+                        raise AssertionError(f"VLESS REALITY client traffic failed: {last}")
+                finally:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    httpd.shutdown()
+                    thread.join(timeout=5)
+        print("VLESS REALITY Vision API, client, link, idempotence and traffic: PASS")
+    finally:
+        if created:
+            api.post(f"clients/del/{spec.client_email}", {})
+            api.post(f"inbounds/del/{first['inbound_id']}", {})
+
+
+if __name__ == "__main__":
+    main()

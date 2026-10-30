@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import ssl
 import urllib.error
 import urllib.parse
@@ -20,7 +21,12 @@ class ApiUncertainError(ApiError):
 
 
 READ_PATHS = frozenset({"inbounds/list", "clients/list", "server/status"})
+READ_DYNAMIC = re.compile(
+    r"^(?:inbounds/get/[1-9][0-9]*|clients/(?:get|links)/[A-Za-z0-9_.+@-]+|"
+    r"clients/subLinks/[A-Za-z0-9_-]+)$"
+)
 WRITE_PATHS = frozenset({"inbounds/add", "clients/add"})
+WRITE_DYNAMIC = re.compile(r"^(?:inbounds/del/[1-9][0-9]*|clients/del/[A-Za-z0-9_.+@-]+)$")
 OPENAPI_SHA256_311 = "e26231888ccd904831f1bc3440d6e6faecaf721c4550daaaa2eb24abac58625f"
 MAX_RESPONSE = 8 * 1024 * 1024
 
@@ -74,7 +80,7 @@ class ApiClient:
         return raw
 
     def read(self, path: str) -> object:
-        if path not in READ_PATHS:
+        if path not in READ_PATHS and not READ_DYNAMIC.fullmatch(path):
             raise ApiError(f"read path is not allowlisted: {path}")
         try:
             data = json.loads(self._request("GET", path))
@@ -91,7 +97,7 @@ class ApiClient:
         return True
 
     def post(self, path: str, payload: dict) -> object:
-        if path not in WRITE_PATHS:
+        if path not in WRITE_PATHS and not WRITE_DYNAMIC.fullmatch(path):
             raise ApiError(f"write path is not allowlisted: {path}")
         if not isinstance(payload, dict):
             raise ValueError("JSON object required")
